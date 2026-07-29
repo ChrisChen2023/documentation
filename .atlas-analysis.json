@@ -1,30 +1,11 @@
 {
-  "$schema": "https://mintlify.com/docs.json",
+  "projectType": "general",
+  "projectName": "昕原半导体文档中心",
+  "projectDescription": "昕原半导体三大产品线（eReRAM IP、URM/UPC 芯片、ATOM AI存算一体方案）的官方技术文档中心，面向芯片设计工程师、系统开发工程师和AI应用工程师。",
   "theme": "maple",
-  "name": "昕原半导体文档中心",
-  "colors": {
-    "primary": "#ef7025",
-    "light": "#eec9bc",
-    "dark": "#4fa1ab"
-  },
-  "favicon": "/favicon.svg",
-  "logo": {
-    "light": "/logo/light.svg",
-    "dark": "/logo/dark.svg"
-  },
-  "navbar": {
-    "links": [
-      {
-        "label": "官网",
-        "href": "https://www.xinyuansemi.com"
-      }
-    ],
-    "primary": {
-      "type": "button",
-      "label": "联系我们",
-      "href": "mailto:sales@xinyuansemi.com"
-    }
-  },
+  "primaryColor": "#ef7025",
+  "lightColor": "#eec9bc",
+  "darkColor": "#4fa1ab",
   "navigation": {
     "tabs": [
       {
@@ -141,7 +122,20 @@
       }
     ]
   },
-  "footer": {
-    "socials": {}
-  }
+  "keyFeatures": [
+    "eReRAM嵌入式阻变存储IP，支持多工艺节点集成",
+    "URM独立存储芯片，提供SPI/I2C/并行接口",
+    "UPC MCU，内置eReRAM非易失性存储",
+    "ATOM AI存算一体板卡，支持边缘推理加速",
+    "低功耗设计，适用于IoT与工业控制场景",
+    "完整SDK与驱动支持，加速客户产品开发"
+  ],
+  "publicApiSurface": [
+    "eReRAM IP 集成接口（AMBA APB / AHB）",
+    "URM/UPC 寄存器读写接口",
+    "URM SPI/I2C 通信协议",
+    "ATOM SDK 推理API",
+    "ATOM 模型转换工具CLI",
+    "ATOM 板卡GPIO/UART调试接口"
+  ]
 }

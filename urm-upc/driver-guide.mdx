@@ -1,0 +1,262 @@
+---
+title: "URM 存储芯片 SPI 驱动与 UPC HAL 开发指南"
+sidebarTitle: "驱动开发"
+description: "昕原半导体提供 URM SPI 裸机 C 驱动和 UPC HAL 库，本文介绍驱动 API 接口、初始化方法、RTOS 多任务保护及深度掉电控制流程。"
+---
+
+昕原半导体为 URM 系列存储芯片和 UPC 系列 MCU 提供完整的软件驱动支持，包括面向裸机嵌入式环境的 URM SPI C 驱动、UPC 外设 HAL 抽象层，以及针对 FreeRTOS 的 RTOS 移植包。开发者可以直接将驱动源文件集成进现有工程，无需从零实现底层时序控制，显著缩短产品开发周期。本文详细介绍各驱动模块的组成结构、安装方式、API 接口规范及多任务保护注意事项。
+
+## 驱动概览
+
+昕原半导体目前提供以下三类驱动组件：
+
+| 驱动组件 | 适用芯片 | 运行环境 | 文件 |
+|---|---|---|---|
+| URM SPI 裸机 C 驱动 | URM 全系列 | 裸机 / RTOS | `urm_spi.c` / `urm_spi.h` |
+| UPC HAL 外设抽象层 | UPC 全系列 | 裸机 / RTOS | `upc_hal_*.c` / `.h` |
+| FreeRTOS 移植包 | UPC MCU | FreeRTOS | `upc_freertos_port.c` |
+
+<Note>
+驱动源码采用标准 C99 编写，兼容 GCC、IAR 及 Keil MDK 工具链，并可随 STM32 HAL、自研 BSP 等平台无缝集成。如需获取完整驱动源码，请联系昕原半导体销售或技术支持团队。
+</Note>
+
+---
+
+## URM SPI 驱动安装
+
+URM SPI 驱动以两个独立源文件形式提供，安装过程简洁。
+
+<Steps>
+
+### 将驱动文件复制到工程目录
+
+将 `urm_spi.c` 和 `urm_spi.h` 复制到项目的驱动目录（例如 `Drivers/URM/`）中。目录结构示例如下：
+
+```
+your_project/
+├── Core/
+│   └── Src/
+│       └── main.c
+├── Drivers/
+│   ├── STM32xx_HAL_Driver/
+│   └── URM/
+│       ├── urm_spi.c      ← 复制到此处
+│       └── urm_spi.h      ← 复制到此处
+```
+
+### 将源文件加入编译
+
+在 IDE（Keil / IAR / CMake）中将 `urm_spi.c` 添加到编译目标，并将 `Drivers/URM/` 目录加入头文件搜索路径（Include Paths）。
+
+```bash
+# CMake 示例（CMakeLists.txt）
+target_sources(your_target PRIVATE Drivers/URM/urm_spi.c)
+target_include_directories(your_target PRIVATE Drivers/URM)
+```
+
+### 配置 SPI 外设
+
+在 STM32CubeMX 或手动代码中完成 SPI 外设初始化，确保以下参数与 URM 数据手册一致：
+
+- **模式**：SPI Master，全双工
+- **CPOL / CPHA**：模式 0（CPOL=0，CPHA=0）
+- **数据位宽**：8-bit
+- **字节顺序**：MSB First
+- **片选（CS）**：软件控制（GPIO 输出）
+
+### 在应用代码中包含头文件并调用初始化
+
+```c
+#include "urm_spi.h"
+
+extern SPI_HandleTypeDef hspi1;  /* STM32 HAL SPI 句柄 */
+
+int main(void) {
+    HAL_Init();
+    SystemClock_Config();
+    MX_SPI1_Init();
+
+    /* 初始化 URM 驱动，传入 SPI 句柄指针 */
+    URM_Init(&hspi1);
+
+    /* 后续操作 */
+}
+```
+
+</Steps>
+
+---
+
+## URM SPI 驱动 API 参考
+
+以下为 URM SPI 驱动全部公共接口的函数签名与说明。所有函数均定义在 `urm_spi.h` 中，返回值类型 `URM_Status` 为枚举类型，`URM_OK` 表示成功，`URM_ERR` 表示错误。
+
+### 初始化
+
+```c
+URM_Status URM_Init(SPI_HandleTypeDef *hspi);
+```
+
+初始化 URM 驱动，将外部传入的 SPI 外设句柄绑定到驱动内部上下文。**必须在调用任何其他 URM API 之前调用**。`hspi` 指向已完成底层初始化的 STM32 HAL SPI 句柄（或与平台对应的等效结构体）。
+
+---
+
+### 单字节读取
+
+```c
+URM_Status URM_ReadByte(uint16_t addr, uint8_t *data);
+```
+
+从存储阵列的 `addr` 地址读取 1 字节数据，结果写入 `data` 所指内存。适用于读取配置寄存器或少量状态字节的场景。
+
+---
+
+### 连续读取
+
+```c
+URM_Status URM_ReadBurst(uint16_t addr, uint8_t *buf, uint16_t len);
+```
+
+从起始地址 `addr` 开始，连续读取 `len` 字节到缓冲区 `buf`。驱动内部使用 SPI 连续传输模式，CS 信号在整个传输期间保持低电平，效率优于多次单字节读取。
+
+---
+
+### 单字节写入
+
+```c
+URM_Status URM_WriteByte(uint16_t addr, uint8_t data);
+```
+
+向地址 `addr` 写入 1 字节 `data`。调用前需先执行 `URM_WriteEnable()`，并在写入后轮询 `URM_IsBusy()` 直到写入完成。
+
+---
+
+### 连续写入
+
+```c
+URM_Status URM_WriteBurst(uint16_t addr, const uint8_t *buf, uint16_t len);
+```
+
+从地址 `addr` 开始，将 `buf` 中的 `len` 字节连续写入存储阵列。与 NOR Flash 不同，URM 基于 eReRAM 技术，**无需预先擦除即可直接覆盖写入**，极大简化了写入逻辑。
+
+<Warning>
+连续写入操作同样需要先调用 `URM_WriteEnable()`。写入期间不得断电，否则可能导致数据不一致。写入完成后需通过 `URM_IsBusy()` 确认芯片已就绪。
+</Warning>
+
+---
+
+### 写使能
+
+```c
+URM_Status URM_WriteEnable(void);
+```
+
+发送写使能命令（WREN），将内部写使能锁存位（WEL）置 1。每次写操作（字节写、连续写、状态寄存器写）前均需调用此函数。写操作完成后 WEL 位自动清零。
+
+---
+
+### 查询忙状态
+
+```c
+bool URM_IsBusy(void);
+```
+
+读取状态寄存器中的 BUSY 位，返回 `true` 表示芯片正在执行内部写操作，返回 `false` 表示就绪。典型用法为在写入命令后循环轮询，直到返回 `false` 再进行下一步操作。
+
+---
+
+### 深度掉电控制
+
+```c
+URM_Status URM_EnterDeepPowerDown(void);
+URM_Status URM_ExitDeepPowerDown(void);
+```
+
+`URM_EnterDeepPowerDown()` 向芯片发送深度掉电命令（Deep Power-Down，DP），芯片进入超低功耗待机状态，电流消耗降至典型值 1 µA 以下。芯片在深度掉电状态下不响应任何读写命令。
+
+`URM_ExitDeepPowerDown()` 发送释放深度掉电命令（RDP/Release Power-Down），芯片退出掉电状态并恢复正常工作模式。退出后需等待至少 **t_RES**（参见数据手册）时间再发送操作命令，驱动内部已内置该延迟。
+
+<Tip>
+在系统进入低功耗睡眠前调用 `URM_EnterDeepPowerDown()`，唤醒后调用 `URM_ExitDeepPowerDown()`，可显著降低整系统待机功耗，无需重新调用 `URM_Init()`。
+</Tip>
+
+---
+
+## UPC HAL 外设驱动概览
+
+UPC HAL 层提供对 UPC MCU 片上外设的统一抽象接口，屏蔽寄存器级操作细节，降低应用层开发难度。HAL 层结构与 STM32 HAL 风格高度相似，便于有 STM32 开发经验的工程师快速上手。
+
+UPC HAL 主要覆盖以下外设模块：
+
+| 模块 | 头文件 | 功能描述 |
+|---|---|---|
+| GPIO | `upc_hal_gpio.h` | 输入/输出/中断/复用功能配置 |
+| UART | `upc_hal_uart.h` | 同步/异步串口收发、DMA 模式 |
+| SPI | `upc_hal_spi.h` | 主/从模式、全双工/半双工 |
+| I²C | `upc_hal_i2c.h` | 标准/快速模式、多主仲裁 |
+| Timer | `upc_hal_tim.h` | 基本定时、PWM 输出、输入捕获 |
+| eReRAM Flash | `upc_hal_flash.h` | 程序烧录、页读写、写保护 |
+| Power | `upc_hal_pwr.h` | 睡眠/停止/待机模式管理 |
+| DMA | `upc_hal_dma.h` | 通道配置、循环/单次传输 |
+
+<Note>
+UPC HAL 驱动源码可在申请评估板或签署 NDA 后获取。如需了解更多，请联系昕原半导体技术支持：support@xinyuansemi.com
+</Note>
+
+---
+
+## RTOS 多任务环境注意事项
+
+在 FreeRTOS 或其他 RTOS 环境下使用 URM 驱动时，若多个任务可能同时访问同一 SPI 总线，**必须使用互斥锁（Mutex）保护 SPI 总线**，以防止并发访问导致的数据错乱或总线冲突。
+
+### 互斥锁保护示例
+
+```c
+#include "FreeRTOS.h"
+#include "semphr.h"
+#include "urm_spi.h"
+
+/* 在全局或模块级声明互斥锁句柄 */
+SemaphoreHandle_t xSpiMutex;
+
+void App_Init(void) {
+    /* 在 RTOS 启动前或启动任务中创建互斥锁 */
+    xSpiMutex = xSemaphoreCreateMutex();
+    configASSERT(xSpiMutex != NULL);
+
+    URM_Init(&hspi1);
+}
+
+/* 任务中的安全读写封装 */
+bool URM_SafeReadByte(uint16_t addr, uint8_t *data) {
+    bool result = false;
+    /* 等待最多 10 ms 获取总线访问权 */
+    if (xSemaphoreTake(xSpiMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+        result = (URM_ReadByte(addr, data) == URM_OK);
+        xSemaphoreGive(xSpiMutex);
+    }
+    return result;
+}
+```
+
+<Warning>
+切勿在中断服务例程（ISR）中直接调用 URM 驱动 API。如需在中断中触发 SPI 操作，应使用任务通知（Task Notification）或消息队列将请求转发给专用的 SPI 管理任务处理。
+</Warning>
+
+### FreeRTOS 移植包
+
+UPC FreeRTOS 移植包（`upc_freertos_port.c`）已内置 SPI 总线互斥保护，并提供线程安全的驱动包装函数，开发者无需手动管理锁机制。移植包还包含针对 UPC eReRAM 特性优化的任务感知延迟函数，避免在等待写入完成时占用 CPU。
+
+---
+
+## 获取驱动源码
+
+昕原半导体的驱动源码以**开放源代码形式按需提供**。如需获取完整驱动包（包含示例工程和移植指南），请通过以下方式联系我们：
+
+- **邮箱**：support@xinyuansemi.com
+- **官网**：[www.xinyuansemi.com](https://www.xinyuansemi.com)
+- **主题**：请注明"申请 URM/UPC 驱动源码 + 芯片型号"
+
+<Tip>
+评估板用户可在昕原半导体资源下载页面直接下载配套驱动和示例代码，无需额外申请。
+</Tip>

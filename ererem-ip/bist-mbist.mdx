@@ -1,0 +1,229 @@
+---
+title: "eReRAM IP BIST 与 MBIST 生产测试配置"
+sidebarTitle: "BIST / MBIST"
+description: "eReRAM IP 内置 BIST 控制器支持 March C- 等多种测试算法，本文介绍 BIST 接口信号、运行流程及与 Tessent/TetraMAX 的 MBIST 集成方法。"
+---
+
+在量产芯片交付前，对嵌入式存储器进行完整的出厂自测是保障良率与可靠性的关键环节。昕原 eReRAM IP 内置专用 BIST（Built-In Self-Test）控制器，支持多种工业标准存储器测试算法，无需借助外部测试设备即可在芯片上完成存储阵列的完整性验证，并可通过标准 MBIST 包装接口与 Tessent、TetraMAX 等第三方 MBIST 工具无缝集成，满足从晶圆测试（WAT）到封装后最终测试（FT）的全流程测试需求。
+
+## BIST 与 MBIST 概述
+
+**BIST（内置自测试）** 是将测试逻辑直接嵌入芯片内部的技术。相比依赖外部 ATE 设备的传统测试方案，BIST 具备以下优势：
+
+- **降低 ATE 成本**：复杂的存储器测试向量由片上控制器生成，无需昂贵的高带宽测试机资源。
+- **提升测试覆盖率**：BIST 可以更贴近实际工作频率执行测试，检测 ATE 难以触及的速度相关故障。
+- **支持系统级测试**：上电后可自主运行，适用于现场诊断与可靠性监控。
+
+**MBIST（存储器内置自测试）** 特指针对存储阵列优化的 BIST 技术，通常结合 EDA 工具自动完成多存储器实例的测试架构插入与压缩。
+
+## eReRAM BIST 控制器
+
+昕原 eReRAM IP 的 BIST 控制器集成于存储器宏单元内部，支持以下测试算法：
+
+| 算法名称 | `BIST_MODE[1:0]` | 说明 |
+|---|---|---|
+| March C- | `2'b00` | 工业标准，覆盖粘连故障、转换故障、耦合故障 |
+| March X | `2'b01` | 快速检测，适合晶圆级探针测试，时间约为 March C- 的一半 |
+| 全写-全读 | `2'b10` | 简化模式，写全 0 后读取，用于快速冒烟测试 |
+| 用户自定义 | `2'b11` | 保留，可由昕原定制化配置，适用于特殊故障模型需求 |
+
+<Note>
+March C- 算法的测试时间复杂度为 O(14n)，其中 n 为存储器容量（word 数）。在较大存储阵列上运行时，请确保测试超时窗口设置合理。
+</Note>
+
+## BIST 接口信号
+
+下表列出 eReRAM BIST 控制器的全部外部接口信号：
+
+| 信号名 | 方向 | 位宽 | 描述 |
+|---|---|---|---|
+| `BIST_EN` | 输入 | 1 | BIST 使能信号，高有效。拉高后 IP 进入 BIST 模式，正常存储器访问被屏蔽 |
+| `BIST_MODE[1:0]` | 输入 | 2 | 测试算法选择，需在 `BIST_EN` 拉高前稳定 |
+| `BIST_CLK` | 输入 | 1 | BIST 专用时钟，可与系统时钟独立，便于测试频率扫描 |
+| `BIST_RST_N` | 输入 | 1 | BIST 控制器复位，低有效，必须在 `BIST_EN` 拉高前完成复位 |
+| `BIST_DONE` | 输出 | 1 | 测试完成指示，高有效脉冲，持续 1 个 `BIST_CLK` 周期 |
+| `BIST_FAIL` | 输出 | 1 | 故障指示，高有效。`BIST_DONE` 为高时同步采样此信号 |
+| `BIST_FAIL_ADDR[N-1:0]` | 输出 | N | 首个检测到故障的地址，N 与存储器地址位宽一致 |
+| `BIST_FAIL_DATA[W-1:0]` | 输出 | W | 故障地址处读出的实际数据，W 与数据位宽一致 |
+
+<Warning>
+`BIST_EN` 拉高期间，所有来自用户逻辑的存储器读写请求均被内部仲裁器屏蔽并丢弃。请确保在系统总线空闲时才发起 BIST 测试，防止数据损坏。
+</Warning>
+
+## BIST 运行流程
+
+<Steps>
+
+### Assert BIST_EN，选择算法
+
+在 `BIST_CLK` 时钟上升沿采样的建立时间之前，将 `BIST_MODE[1:0]` 设置为目标算法编码，然后拉高 `BIST_EN`：
+
+```verilog
+// 示例：选择 March C- 算法并启动 BIST
+always @(posedge sys_clk) begin
+  if (start_bist) begin
+    bist_mode <= 2'b00;       // March C-
+    bist_en   <= 1'b1;
+  end
+end
+```
+
+`BIST_EN` 拉高后，BIST 控制器在下一个 `BIST_CLK` 上升沿自动开始测试序列，无需额外触发信号。
+
+### 等待 BIST_DONE 拉高
+
+BIST 控制器在完成全部测试步骤后，将 `BIST_DONE` 拉高一个时钟周期。系统控制器应通过轮询或中断方式监测该信号：
+
+```verilog
+// 轮询等待 BIST 完成
+always @(posedge bist_clk or negedge bist_rst_n) begin
+  if (!bist_rst_n) begin
+    bist_state <= BIST_IDLE;
+  end else begin
+    case (bist_state)
+      BIST_IDLE: begin
+        if (bist_en) bist_state <= BIST_RUNNING;
+      end
+      BIST_RUNNING: begin
+        if (bist_done) bist_state <= BIST_CHECK;
+      end
+      BIST_CHECK: begin
+        bist_state <= BIST_IDLE;
+        bist_en    <= 1'b0;
+      end
+    endcase
+  end
+end
+```
+
+不同容量 eReRAM 的 March C- 预计测试周期数：
+
+| 存储容量 | 地址数 (n) | March C- 周期数 (≈14n) |
+|---|---|---|
+| 4 Kbit | 128 | ~1,792 |
+| 64 Kbit | 2,048 | ~28,672 |
+| 512 Kbit | 16,384 | ~229,376 |
+
+### 检查 BIST_FAIL，读取故障地址
+
+在 `BIST_DONE` 为高的同一时钟沿采样 `BIST_FAIL`：
+
+```verilog
+always @(posedge bist_clk) begin
+  if (bist_done) begin
+    if (bist_fail) begin
+      // 记录首个故障地址和数据
+      fail_addr_reg <= bist_fail_addr;
+      fail_data_reg <= bist_fail_data;
+      $display("[BIST FAIL] 地址: 0x%0h, 读出数据: 0x%0h",
+               bist_fail_addr, bist_fail_data);
+    end else begin
+      $display("[BIST PASS] 所有存储单元测试通过");
+    end
+  end
+end
+```
+
+`BIST_FAIL_ADDR` 仅锁存**第一个**检测到故障的地址。若需获取全部故障地址列表，应集成具有修复映射（Repair Map）功能的 MBIST 工具（见下节）。
+
+</Steps>
+
+## BIST 时序描述
+
+以下为 BIST 操作的典型时序序列：
+
+```
+         ___________________________________________________________
+BIST_CLK _| 1 | 2 | 3 | ... | N-1 | N |___|___|
+          ___________________________________________
+BIST_EN  _|                                        |_______________
+         _____
+BIST_RST_N   |____________________________________________...___
+                                                      ___
+BIST_DONE ________________________________________________| 1T |__
+                                                      ___
+BIST_FAIL __________________________________________(valid)_________
+                                                    ^^^^^^^
+                                                  与 DONE 同步采样
+BIST_FAIL_ADDR ————————————————————————————————[ADDR VALID]————————
+```
+
+**关键时序约束：**
+- `BIST_MODE[1:0]` 必须在 `BIST_EN` 上升沿前至少 2 个 `BIST_CLK` 周期稳定。
+- `BIST_RST_N` 必须在 `BIST_EN` 拉高前完成解复位（低→高跳变）。
+- `BIST_DONE` 为单周期脉冲，系统控制器需在一个时钟周期内完成采样。
+- BIST 运行期间不得改变 `BIST_MODE`，否则行为未定义。
+
+## MBIST 集成：Tessent 与 TetraMAX
+
+对于需要多存储器批量测试、冗余修复映射或测试压缩的场景，昕原 eReRAM IP 提供标准 MBIST 包装接口（Wrapper Interface），兼容 Siemens EDA Tessent 和 Synopsys TetraMAX ATPG。
+
+### Tessent 集成
+
+昕原提供符合 Tessent MemoryBIST 规范的内存模型描述文件（`.memlib`）：
+
+```tcl
+# Tessent MemoryBIST 集成示例
+# 1. 读取 eReRAM 存储器模型库
+read_memory_model ${EREREM_ROOT}/mbist/tessent/ererem_4k32.memlib
+
+# 2. 配置测试算法（使用 March C- 等价算法）
+set_memory_bist_options \
+    -algorithm march_c_minus \
+    -clock_domain bist_clk \
+    -enable_repair_analysis yes
+
+# 3. 插入 MBIST 控制器
+insert_bist
+
+# 4. 输出 MBIST 网表和测试向量
+write_design -output_file ${OUTPUT}/soc_with_mbist.v
+write_patterns ${OUTPUT}/mbist_patterns.stil -format stil
+```
+
+### TetraMAX ATPG 集成
+
+对于 Synopsys TetraMAX，昕原提供 `.spf`（STIL Procedure File）和存储器接口描述：
+
+```tcl
+# TetraMAX ATPG 存储器测试集成
+# 加载 eReRAM 接口描述
+read_netlist ${EREREM_ROOT}/mbist/tetramax/ererem_wrapper.v
+
+# 设置存储器 BIST 模式
+set_memory_model \
+    -name ererem_4k32 \
+    -type rw \
+    -addr_bits 12 \
+    -data_bits 32 \
+    -bist_en   BIST_EN \
+    -bist_done BIST_DONE \
+    -bist_fail BIST_FAIL
+
+# 运行 MBIST 模式 ATPG
+run_atpg -memory_bist
+```
+
+<Note>
+MBIST 集成文件（`.memlib`、`.spf`、BIST 包装网表）需单独申请，不包含在标准 IP 交付包中。请联系昕原 FAE 提供 EDA 工具版本信息，以获取对应版本的集成文件。
+</Note>
+
+## 量产测试流程建议
+
+为确保最高测试覆盖率和良率准确性，昕原建议按以下流程在量产中使用 eReRAM BIST：
+
+1. **晶圆探针测试（CP）**：
+   - 室温（25°C）下运行 March X 快速测试，筛选明显缺陷单元。
+   - 高温（125°C）下运行 March C- 完整测试，检测热激活故障。
+
+2. **封装后最终测试（FT）**：
+   - 上电自动触发 BIST（通过 `BIST_EN` 绑定上电复位逻辑）。
+   - 在低温（-40°C）、室温（25°C）、高温（125°C）三个温度角落分别运行 March C-。
+   - 记录 `BIST_FAIL_ADDR`，用于冗余修复决策（如 IP 支持内置冗余）。
+
+3. **老化测试（Burn-In）前后**：
+   - 老化前运行 BIST 作为基准，老化后重新运行 BIST 对比结果，监测早期失效。
+
+<Warning>
+量产测试中 `BIST_CLK` 频率不应超过 IP datasheet 中规定的最大 BIST 频率。超频运行 BIST 可能导致误报（False Fail），影响良率统计。
+</Warning>

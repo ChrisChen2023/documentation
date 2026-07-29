@@ -1,0 +1,553 @@
+---
+title: "URM 与 UPC 固件开发代码示例集"
+sidebarTitle: "代码示例"
+description: "URM SPI 读写、写保护配置，UPC GPIO/UART/SPI 操作的完整 C 语言代码示例，可直接用于 STM32 HAL 或 UPC MCU 裸机固件开发。"
+---
+
+本页汇集了 URM 存储芯片和 UPC MCU 固件开发中最常用场景的完整 C 语言代码示例。所有示例均基于昕原半导体提供的 URM SPI 驱动和 UPC HAL 库编写，遵循 STM32 HAL 代码风格，可直接复制到工程中使用。建议在正式集成前先在评估板上验证示例行为是否符合预期。
+
+---
+
+## 示例 1：URM SPI 初始化与单字节读写
+
+本示例展示最基础的 URM 驱动初始化流程，以及对存储阵列某一地址执行单字节写入和读回验证的完整步骤。适用于快速验证硬件连接和 SPI 时序是否正确。
+
+```c
+#include "main.h"
+#include "urm_spi.h"
+#include <stdio.h>
+
+extern SPI_HandleTypeDef hspi1;
+
+/* 用于 printf 重定向到 UART 的 fputc 已在别处实现 */
+
+void URM_SingleByteExample(void) {
+    uint8_t write_data = 0xA5;
+    uint8_t read_data  = 0x00;
+    URM_Status status;
+
+    /* 步骤 1：初始化 URM 驱动，绑定 SPI1 句柄 */
+    status = URM_Init(&hspi1);
+    if (status != URM_OK) {
+        printf("[ERROR] URM_Init 失败，请检查 SPI 硬件连接\r\n");
+        return;
+    }
+    printf("[INFO]  URM 驱动初始化成功\r\n");
+
+    /* 步骤 2：写使能 */
+    URM_WriteEnable();
+
+    /* 步骤 3：向地址 0x0010 写入 0xA5 */
+    status = URM_WriteByte(0x0010, write_data);
+    if (status != URM_OK) {
+        printf("[ERROR] URM_WriteByte 失败\r\n");
+        return;
+    }
+
+    /* 步骤 4：等待内部写操作完成 */
+    while (URM_IsBusy()) {
+        HAL_Delay(1);
+    }
+
+    /* 步骤 5：从相同地址读回数据 */
+    status = URM_ReadByte(0x0010, &read_data);
+    if (status != URM_OK) {
+        printf("[ERROR] URM_ReadByte 失败\r\n");
+        return;
+    }
+
+    /* 步骤 6：比较写入与读出值 */
+    if (read_data == write_data) {
+        printf("[PASS]  地址 0x0010 读写一致：0x%02X\r\n", read_data);
+    } else {
+        printf("[FAIL]  数据不一致！写入 0x%02X，读出 0x%02X\r\n",
+               write_data, read_data);
+    }
+}
+```
+
+**预期输出（串口）：**
+```
+[INFO]  URM 驱动初始化成功
+[PASS]  地址 0x0010 读写一致：0xA5
+```
+
+---
+
+## 示例 2：URM 连续写入与读取验证
+
+本示例演示如何使用 `URM_WriteBurst` 和 `URM_ReadBurst` 对一段连续地址空间进行批量写入和读取，并逐字节比较结果，适合用于出厂测试或内存完整性检查。
+
+```c
+#include "urm_spi.h"
+#include <string.h>
+#include <stdio.h>
+
+#define TEST_ADDR   0x0100U
+#define TEST_LEN    64U
+
+void URM_BurstRWExample(void) {
+    /* 准备写入数据：填充 0x00~0x3F */
+    uint8_t tx_buf[TEST_LEN];
+    uint8_t rx_buf[TEST_LEN];
+    uint32_t fail_count = 0;
+
+    for (uint16_t i = 0; i < TEST_LEN; i++) {
+        tx_buf[i] = (uint8_t)i;
+    }
+    memset(rx_buf, 0xFF, TEST_LEN);
+
+    /* 写使能 */
+    URM_WriteEnable();
+
+    /* 连续写入 64 字节到起始地址 0x0100 */
+    if (URM_WriteBurst(TEST_ADDR, tx_buf, TEST_LEN) != URM_OK) {
+        printf("[ERROR] URM_WriteBurst 失败\r\n");
+        return;
+    }
+
+    /* 等待写入完成 */
+    while (URM_IsBusy()) {
+        HAL_Delay(1);
+    }
+
+    /* 连续读取 64 字节 */
+    if (URM_ReadBurst(TEST_ADDR, rx_buf, TEST_LEN) != URM_OK) {
+        printf("[ERROR] URM_ReadBurst 失败\r\n");
+        return;
+    }
+
+    /* 逐字节比对 */
+    for (uint16_t i = 0; i < TEST_LEN; i++) {
+        if (rx_buf[i] != tx_buf[i]) {
+            printf("[FAIL]  偏移 %3u：期望 0x%02X，实际 0x%02X\r\n",
+                   i, tx_buf[i], rx_buf[i]);
+            fail_count++;
+        }
+    }
+
+    if (fail_count == 0) {
+        printf("[PASS]  连续读写 %u 字节全部一致\r\n", TEST_LEN);
+    } else {
+        printf("[FAIL]  共 %lu 字节不一致\r\n", fail_count);
+    }
+}
+```
+
+**预期输出：**
+```
+[PASS]  连续读写 64 字节全部一致
+```
+
+<Note>
+URM 基于 eReRAM 技术，连续写入无需预先块擦除，可直接覆盖写入。与 NOR Flash 的页编程操作相比，写入流程更简洁，延迟也更低。
+</Note>
+
+---
+
+## 示例 3：URM 写保护配置（设置 BP 位）
+
+本示例展示如何通过写入状态寄存器的块保护位（BP2:BP1:BP0）来保护存储阵列的指定区域，防止意外写入。以保护存储空间顶部 1/4 区域为例。
+
+```c
+#include "urm_spi.h"
+#include <stdio.h>
+
+/*
+ * URM 状态寄存器位定义（参见数据手册 Table 6-1）：
+ *   Bit 7 : SRWD  — 状态寄存器写禁止（需配合 /WP 引脚）
+ *   Bit 4 : BP2   — 块保护位 2
+ *   Bit 3 : BP1   — 块保护位 1
+ *   Bit 2 : BP0   — 块保护位 0
+ *   Bit 1 : WEL   — 写使能锁存（只读）
+ *   Bit 0 : BUSY  — 内部操作忙（只读）
+ *
+ * BP[2:0] 保护区域对照（以 1 Mbit 容量为例）：
+ *   000 → 无保护
+ *   001 → 保护顶部 1/8（0x1E00~0x1FFF）
+ *   010 → 保护顶部 1/4（0x1C00~0x1FFF）
+ *   011 → 保护顶部 1/2（0x1800~0x1FFF）
+ *   100 → 全部保护
+ */
+
+#define URM_SR_BP0   (1U << 2)
+#define URM_SR_BP1   (1U << 3)
+#define URM_SR_BP2   (1U << 4)
+#define URM_SR_SRWD  (1U << 7)
+
+/* 内部函数：读状态寄存器（RDSR 指令 0x05） */
+static URM_Status URM_ReadStatusReg(uint8_t *sr) {
+    /* 实际调用平台 SPI 发送 0x05 指令并读取 1 字节响应 */
+    return URM_ReadByte(URM_REG_STATUS, sr);  /* 驱动内部地址宏 */
+}
+
+/* 内部函数：写状态寄存器（WRSR 指令 0x01） */
+static URM_Status URM_WriteStatusReg(uint8_t sr) {
+    URM_WriteEnable();
+    return URM_WriteByte(URM_REG_STATUS, sr);
+}
+
+void URM_WriteProtectExample(void) {
+    uint8_t sr_val = 0;
+
+    /* 读取当前状态寄存器 */
+    if (URM_ReadStatusReg(&sr_val) != URM_OK) {
+        printf("[ERROR] 读取状态寄存器失败\r\n");
+        return;
+    }
+    printf("[INFO]  当前状态寄存器值：0x%02X\r\n", sr_val);
+
+    /* 清除旧 BP 位，设置 BP[2:0] = 010（保护顶部 1/4） */
+    sr_val &= ~(URM_SR_BP0 | URM_SR_BP1 | URM_SR_BP2);
+    sr_val |=  URM_SR_BP1;
+
+    /* 写入新状态寄存器值 */
+    if (URM_WriteStatusReg(sr_val) != URM_OK) {
+        printf("[ERROR] 写入状态寄存器失败\r\n");
+        return;
+    }
+
+    /* 等待写入完成 */
+    while (URM_IsBusy()) {
+        HAL_Delay(1);
+    }
+
+    /* 回读验证 */
+    URM_ReadStatusReg(&sr_val);
+    printf("[INFO]  写保护设置后状态寄存器：0x%02X\r\n", sr_val);
+    printf("[INFO]  BP[2:0] = %u%u%u（保护顶部 1/4 区域）\r\n",
+           (sr_val >> 4) & 1,
+           (sr_val >> 3) & 1,
+           (sr_val >> 2) & 1);
+}
+```
+
+<Warning>
+若将 SRWD 位置 1 且 /WP 引脚拉低，状态寄存器将被硬件锁定，软件无法修改。请确保在设置 SRWD 前已完成所有写保护区域规划，避免误锁。
+</Warning>
+
+---
+
+## 示例 4：UPC GPIO 配置为输出并控制 LED
+
+本示例直接操作 UPC MCU 的 GPIO 寄存器，将 GPIOB Pin 5 配置为推挽输出，并以 500 ms 为周期翻转电平以驱动 LED 闪烁，展示最基础的 I/O 控制方法。
+
+```c
+#include "upc_hal_gpio.h"
+
+/*
+ * 硬件连接：
+ *   UPC GPIOB.5 → 220Ω 限流电阻 → LED 阳极 → LED 阴极 → GND
+ */
+
+#define LED_PORT    GPIOB
+#define LED_PIN     GPIO_PIN_5
+
+void UPC_GPIO_LED_Example(void) {
+    /* 步骤 1：使能 GPIOB 时钟 */
+    UPC_HAL_RCC_GPIOB_CLK_ENABLE();
+
+    /* 步骤 2：配置引脚为推挽输出，无上下拉，速度低 */
+    GPIO_InitTypeDef gpio_cfg = {
+        .Pin   = LED_PIN,
+        .Mode  = GPIO_MODE_OUTPUT_PP,   /* 推挽输出 */
+        .Pull  = GPIO_NOPULL,
+        .Speed = GPIO_SPEED_FREQ_LOW
+    };
+    UPC_HAL_GPIO_Init(LED_PORT, &gpio_cfg);
+
+    /* 步骤 3：初始状态 LED 熄灭（输出高电平，LED 阴极接地时高电平为灭） */
+    UPC_HAL_GPIO_WritePin(LED_PORT, LED_PIN, GPIO_PIN_SET);
+
+    /* 步骤 4：无限循环，每 500 ms 翻转一次 */
+    while (1) {
+        UPC_HAL_GPIO_TogglePin(LED_PORT, LED_PIN);
+        UPC_HAL_Delay(500);  /* 阻塞延迟 500 ms */
+    }
+}
+```
+
+**预期行为：** LED 以 1 Hz 频率（亮 500 ms / 灭 500 ms）持续闪烁。
+
+<Tip>
+若需在中断或 RTOS 任务中控制 LED，将 `UPC_HAL_GPIO_TogglePin` 调用移入对应的回调函数或任务循环即可，GPIO 操作本身是线程安全的（单个寄存器位操作具有原子性）。
+</Tip>
+
+---
+
+## 示例 5：UPC UART 初始化与发送字符串
+
+本示例展示如何使用 UPC HAL 库初始化 UART1（115200-8-N-1），并通过轮询方式发送一条格式化文本字符串，适用于调试输出或简单串口通信场景。
+
+```c
+#include "upc_hal_uart.h"
+#include <string.h>
+#include <stdio.h>
+
+UART_HandleTypeDef huart1;
+
+static void UPC_UART1_Init(void) {
+    huart1.Instance          = UPC_UART1;
+    huart1.Init.BaudRate     = 115200;
+    huart1.Init.WordLength   = UART_WORDLENGTH_8B;
+    huart1.Init.StopBits     = UART_STOPBITS_1;
+    huart1.Init.Parity       = UART_PARITY_NONE;
+    huart1.Init.Mode         = UART_MODE_TX_RX;
+    huart1.Init.HwFlowCtl    = UART_HWCONTROL_NONE;
+    huart1.Init.OverSampling = UART_OVERSAMPLING_16;
+
+    if (UPC_HAL_UART_Init(&huart1) != HAL_OK) {
+        /* 初始化失败，进入错误处理 */
+        Error_Handler();
+    }
+}
+
+void UPC_UART_TxExample(void) {
+    char msg[64];
+    uint32_t counter = 0;
+
+    UPC_UART1_Init();
+
+    /* 发送启动提示 */
+    const char *banner = "\r\n=== UPC UART 示例程序启动 ===\r\n";
+    UPC_HAL_UART_Transmit(&huart1,
+                          (uint8_t *)banner,
+                          strlen(banner),
+                          HAL_MAX_DELAY);
+
+    while (1) {
+        /* 格式化计数字符串并发送 */
+        int len = snprintf(msg, sizeof(msg),
+                           "[%05lu] 昕原半导体 UPC 串口测试\r\n",
+                           counter++);
+        UPC_HAL_UART_Transmit(&huart1,
+                              (uint8_t *)msg,
+                              (uint16_t)len,
+                              HAL_MAX_DELAY);
+        UPC_HAL_Delay(1000);
+    }
+}
+```
+
+**预期串口输出（115200 bps）：**
+```
+=== UPC UART 示例程序启动 ===
+[00000] 昕原半导体 UPC 串口测试
+[00001] 昕原半导体 UPC 串口测试
+[00002] 昕原半导体 UPC 串口测试
+...
+```
+
+<Note>
+如需将 `printf` 重定向到 UART，可在 `syscalls.c` 中重写 `_write` 函数，调用 `UPC_HAL_UART_Transmit` 发送数据，无需修改应用层代码。
+</Note>
+
+---
+
+## 示例 6：UPC SPI 主机模式与 URM 通信完整示例
+
+本示例展示以 UPC MCU 作为 SPI 主机，通过其片上 SPI 控制器与外部 URM 存储芯片通信的完整过程，包含 SPI 初始化、片选 GPIO 配置、URM 驱动绑定和完整读写验证流程，是前述所有示例的综合集成版本。
+
+<CodeGroup>
+
+```c upc_spi_urm_main.c
+/* upc_spi_urm_main.c
+ * UPC MCU 作为 SPI 主机与 URM 存储芯片通信完整示例
+ *
+ * 硬件连接：
+ *   UPC SPI1_SCK  (PA5) → URM CLK
+ *   UPC SPI1_MOSI (PA7) → URM SI
+ *   UPC SPI1_MISO (PA6) → URM SO
+ *   UPC GPIO PA4  (CS)  → URM /CS
+ *   3.3V                → URM VCC
+ *   GND                 → URM GND
+ */
+
+#include "upc_hal_spi.h"
+#include "upc_hal_gpio.h"
+#include "urm_spi.h"
+#include <stdio.h>
+#include <string.h>
+
+/* ------------------------------------------------------------------ */
+/* 硬件资源定义                                                         */
+/* ------------------------------------------------------------------ */
+#define URM_SPI_INSTANCE   UPC_SPI1
+#define URM_CS_PORT        GPIOA
+#define URM_CS_PIN         GPIO_PIN_4
+
+SPI_HandleTypeDef  hspi_urm;
+
+/* ------------------------------------------------------------------ */
+/* SPI1 外设初始化                                                      */
+/* ------------------------------------------------------------------ */
+static void SPI1_Init(void) {
+    /* 使能 SPI1 和 GPIOA 时钟 */
+    UPC_HAL_RCC_SPI1_CLK_ENABLE();
+    UPC_HAL_RCC_GPIOA_CLK_ENABLE();
+
+    /* 配置 SCK / MOSI / MISO 为复用功能推挽 */
+    GPIO_InitTypeDef spi_pins = {
+        .Pin       = GPIO_PIN_5 | GPIO_PIN_6 | GPIO_PIN_7,
+        .Mode      = GPIO_MODE_AF_PP,
+        .Pull      = GPIO_NOPULL,
+        .Speed     = GPIO_SPEED_FREQ_HIGH,
+        .Alternate = GPIO_AF5_SPI1
+    };
+    UPC_HAL_GPIO_Init(GPIOA, &spi_pins);
+
+    /* 配置 CS 引脚为普通推挽输出（软件控制） */
+    GPIO_InitTypeDef cs_pin = {
+        .Pin   = URM_CS_PIN,
+        .Mode  = GPIO_MODE_OUTPUT_PP,
+        .Pull  = GPIO_NOPULL,
+        .Speed = GPIO_SPEED_FREQ_HIGH
+    };
+    UPC_HAL_GPIO_Init(URM_CS_PORT, &cs_pin);
+
+    /* 默认释放 CS（高电平） */
+    UPC_HAL_GPIO_WritePin(URM_CS_PORT, URM_CS_PIN, GPIO_PIN_SET);
+
+    /* 配置 SPI1 主机模式，SPI Mode 0，8-bit，MSB，分频 /8 */
+    hspi_urm.Instance               = URM_SPI_INSTANCE;
+    hspi_urm.Init.Mode              = SPI_MODE_MASTER;
+    hspi_urm.Init.Direction         = SPI_DIRECTION_2LINES;
+    hspi_urm.Init.DataSize          = SPI_DATASIZE_8BIT;
+    hspi_urm.Init.CLKPolarity       = SPI_POLARITY_LOW;   /* CPOL=0 */
+    hspi_urm.Init.CLKPhase          = SPI_PHASE_1EDGE;    /* CPHA=0 */
+    hspi_urm.Init.NSS               = SPI_NSS_SOFT;       /* 软件 CS */
+    hspi_urm.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_8;
+    hspi_urm.Init.FirstBit          = SPI_FIRSTBIT_MSB;
+    hspi_urm.Init.TIMode            = SPI_TIMODE_DISABLE;
+    hspi_urm.Init.CRCCalculation    = SPI_CRCCALCULATION_DISABLE;
+
+    if (UPC_HAL_SPI_Init(&hspi_urm) != HAL_OK) {
+        Error_Handler();
+    }
+}
+
+/* ------------------------------------------------------------------ */
+/* 主函数                                                               */
+/* ------------------------------------------------------------------ */
+void UPC_SPI_URM_FullExample(void) {
+    uint8_t tx_data[16];
+    uint8_t rx_data[16];
+    uint32_t fail = 0;
+
+    /* 1. 初始化 SPI 外设 */
+    SPI1_Init();
+
+    /* 2. 初始化 URM 驱动，绑定 SPI 句柄 */
+    if (URM_Init(&hspi_urm) != URM_OK) {
+        printf("[ERROR] URM 初始化失败，请检查连线\r\n");
+        return;
+    }
+    printf("[INFO]  URM 初始化成功\r\n");
+
+    /* 3. 准备测试数据 */
+    for (int i = 0; i < 16; i++) {
+        tx_data[i] = 0x10 + (uint8_t)i;
+    }
+    memset(rx_data, 0, sizeof(rx_data));
+
+    /* 4. 写使能 + 连续写入 16 字节到地址 0x0200 */
+    URM_WriteEnable();
+    if (URM_WriteBurst(0x0200, tx_data, 16) != URM_OK) {
+        printf("[ERROR] URM_WriteBurst 失败\r\n");
+        return;
+    }
+    while (URM_IsBusy()) {
+        UPC_HAL_Delay(1);
+    }
+    printf("[INFO]  写入完成\r\n");
+
+    /* 5. 连续读取 16 字节回缓冲区 */
+    if (URM_ReadBurst(0x0200, rx_data, 16) != URM_OK) {
+        printf("[ERROR] URM_ReadBurst 失败\r\n");
+        return;
+    }
+
+    /* 6. 逐字节比对并打印 */
+    printf("[INFO]  读写比对结果：\r\n");
+    for (int i = 0; i < 16; i++) {
+        if (rx_data[i] != tx_data[i]) {
+            printf("  [%02d] FAIL  写：0x%02X  读：0x%02X\r\n",
+                   i, tx_data[i], rx_data[i]);
+            fail++;
+        } else {
+            printf("  [%02d] OK    0x%02X\r\n", i, rx_data[i]);
+        }
+    }
+
+    if (fail == 0) {
+        printf("[PASS]  16 字节全部一致，SPI 通信正常\r\n");
+    } else {
+        printf("[FAIL]  %lu 字节不一致，请检查 SPI 时序或硬件连接\r\n", fail);
+    }
+
+    /* 7. 测试深度掉电：进入后等待 10 ms 再退出 */
+    URM_EnterDeepPowerDown();
+    UPC_HAL_Delay(10);
+    URM_ExitDeepPowerDown();
+    printf("[INFO]  深度掉电进入/退出测试完成\r\n");
+}
+```
+
+```c urm_spi_port.c
+/* urm_spi_port.c
+ * URM 驱动平台移植层（UPC HAL 版本）
+ * 将 URM 驱动内部的 CS 控制和 SPI 传输函数映射到 UPC HAL API
+ */
+
+#include "urm_spi_port.h"
+#include "upc_hal_spi.h"
+#include "upc_hal_gpio.h"
+
+#define URM_CS_PORT  GPIOA
+#define URM_CS_PIN   GPIO_PIN_4
+
+extern SPI_HandleTypeDef hspi_urm;
+
+/* 拉低 CS — 选中 URM */
+void URM_Port_CSLow(void) {
+    UPC_HAL_GPIO_WritePin(URM_CS_PORT, URM_CS_PIN, GPIO_PIN_RESET);
+}
+
+/* 释放 CS — 取消选中 */
+void URM_Port_CSHigh(void) {
+    UPC_HAL_GPIO_WritePin(URM_CS_PORT, URM_CS_PIN, GPIO_PIN_SET);
+}
+
+/* SPI 全双工传输（发送并接收） */
+HAL_StatusTypeDef URM_Port_SpiTransmitReceive(uint8_t *tx,
+                                               uint8_t *rx,
+                                               uint16_t len) {
+    return UPC_HAL_SPI_TransmitReceive(&hspi_urm, tx, rx, len,
+                                       HAL_MAX_DELAY);
+}
+
+/* 微秒级延迟（用于 t_RES 等时序等待） */
+void URM_Port_DelayUs(uint32_t us) {
+    /* UPC 提供 DWT 周期计数器实现的微秒延迟 */
+    UPC_HAL_DelayUs(us);
+}
+```
+
+</CodeGroup>
+
+**预期串口输出：**
+```
+[INFO]  URM 初始化成功
+[INFO]  写入完成
+[INFO]  读写比对结果：
+  [00] OK    0x10
+  [01] OK    0x11
+  ...
+  [15] OK    0x1F
+[PASS]  16 字节全部一致，SPI 通信正常
+[INFO]  深度掉电进入/退出测试完成
+```
+
+<Note>
+移植层文件 `urm_spi_port.c` 将 URM 驱动的底层接口与 UPC HAL 解耦，若需迁移到其他 MCU 平台（如 STM32、NXP），只需修改移植层中对应的 HAL 调用，上层驱动和应用代码无需改动。
+</Note>

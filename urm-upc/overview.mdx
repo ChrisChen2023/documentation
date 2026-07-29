@@ -1,0 +1,99 @@
+---
+title: "URM 存储芯片与 UPC MCU 产品系列介绍"
+sidebarTitle: "产品介绍"
+description: "昕原半导体 URM 独立 eReRAM 存储芯片和 UPC MCU 系列，支持 SPI/I2C 接口，无需擦除周期，适用于 IoT、工业控制和汽车电子等低功耗应用场景。"
+---
+
+昕原半导体的 URM 与 UPC 系列产品均以嵌入式阻变存储器（eReRAM）技术为核心，面向对存储可靠性、低功耗和小封装有严格要求的嵌入式系统设计者。URM 系列提供独立非易失性存储芯片，可直接替换传统串行 Flash 或 EEPROM；UPC 系列则将 eReRAM 集成至 MCU 内部，作为程序存储和数据存储的统一介质，简化系统 BOM 并降低整机成本。两个系列均通过工业级和汽车级温度认证，适用于从消费电子到严苛工况的广泛场景。
+
+## URM — 独立 eReRAM 存储芯片
+
+URM（Unified ReRAM Memory）系列是昕原半导体推出的独立非易失性存储芯片，采用先进的嵌入式阻变存储（eReRAM）单元阵列，提供 SPI 和 I2C 两种主流串行接口，可直接替换现有系统中的串行 NOR Flash 和 EEPROM 器件。
+
+<Note>
+URM 系列与常见串行 Flash/EEPROM 引脚及指令集高度兼容，在大多数应用场景下无需修改硬件原理图即可完成替换。
+</Note>
+
+### 核心特性
+
+| 特性 | 说明 |
+|------|------|
+| **存储技术** | eReRAM（嵌入式阻变存储器）非易失性单元 |
+| **接口类型** | SPI（最高 50 MHz）、I2C（最高 1 MHz Fast-mode Plus） |
+| **写入方式** | 字节级随机写入，**无需预先擦除**，写延迟低至 5 µs |
+| **工作电压** | 1.8 V – 3.6 V（工业级）；2.7 V – 3.6 V（汽车级） |
+| **温度等级** | 工业级 –40 °C ~ +85 °C；汽车级 –40 °C ~ +125 °C |
+| **封装** | SOT-23-5、SOP-8、SOIC-8，适合空间受限场合 |
+| **数据保持** | ≥ 10 年（典型值，85 °C 条件下） |
+| **耐写次数** | ≥ 10⁶ 次/字节（典型值） |
+
+### 相较传统 Flash/EEPROM 的优势
+
+与传统 NOR Flash 相比，URM 系列**无需页擦除**操作，可直接按字节写入任意地址，大幅简化固件逻辑并减少写入延迟。相较于 EEPROM，URM 在相同封装下可提供更高容量，同时写入速度提升 10 倍以上。
+
+<Tip>
+对于频繁更新少量参数（如校准系数、计数器、状态标志）的应用，URM 的字节级写入能力可显著延长系统使用寿命，并降低因擦写失败导致的数据丢失风险。
+</Tip>
+
+---
+
+## UPC — 集成 eReRAM 的 MCU 芯片
+
+UPC（Unified Processing & Computing）系列在单颗芯片内集成了 CPU 核心与 eReRAM 存储阵列，将程序 Flash 和数据 Flash 统一为同一存储介质，消除了传统 Flash MCU 中因擦除操作引发的代码执行停滞问题。
+
+### 核心特性
+
+| 特性 | 说明 |
+|------|------|
+| **CPU 核心** | RISC-V 32-bit（UPC01/UPC02）或 Arm Cortex-M0+（UPC03） |
+| **程序存储** | 片上 eReRAM，16 Kb – 64 Kb，支持 XIP（就地执行） |
+| **片上 SRAM** | 4 Kb – 16 Kb 数据 RAM |
+| **外设接口** | UART、SPI、I2C、GPIO、PWM、12-bit ADC、USB（部分型号） |
+| **工作电压** | 1.8 V – 3.6 V（工业级）；2.7 V – 3.6 V（扩展工业级） |
+| **温度等级** | –40 °C ~ +85 °C / +105 °C（依型号） |
+| **封装** | QFN-24、QFN-32、LQFP-48 |
+| **调试接口** | SWD（Serial Wire Debug），兼容标准调试工具链 |
+
+<Note>
+UPC 系列的 eReRAM 程序存储支持在应用中（In-Application Programming，IAP）进行固件更新，无需外部 Flash 或 Bootloader ROM，简化 OTA 升级设计。
+</Note>
+
+---
+
+## 典型应用场景
+
+URM 和 UPC 系列广泛应用于对存储可靠性、低功耗和小体积有严格要求的场合：
+
+<CardGroup cols={2}>
+  <Card title="IoT 设备与智能家居" icon="wifi">
+    传感器节点、智能插座、无线模组等需要频繁读写配置参数和事件日志的 IoT 终端，受益于 URM 的快速字节写入和超低待机功耗。
+  </Card>
+  <Card title="可穿戴设备" icon="watch">
+    运动手环、医疗监测设备等空间极度受限的场合，URM SOT-23-5 封装和 UPC QFN-24 封装可最大程度节省 PCB 面积。
+  </Card>
+  <Card title="工业传感器与仪表" icon="gauge">
+    工业压力变送器、温湿度记录仪、智能电表等需要长期稳定存储计量数据的设备，工业级温度范围确保在恶劣环境下可靠运行。
+  </Card>
+  <Card title="汽车电子 ECU" icon="car">
+    车身控制模块（BCM）、传感器信号处理单元等汽车电子应用，汽车级 URM3201/URM6401 通过 AEC-Q100 认证，满足 –40 °C ~ +125 °C 温度要求。
+  </Card>
+</CardGroup>
+
+---
+
+## 快速导航
+
+<CardGroup cols={2}>
+  <Card title="产品型号" icon="table" href="/urm-upc/product-lineup">
+    查看 URM 与 UPC 全系列型号规格对比表，包括容量、接口、封装及温度等级，快速完成选型。
+  </Card>
+  <Card title="引脚定义" icon="microchip" href="/urm-upc/pinout">
+    URM SOP-8 与 UPC QFN-32 封装引脚功能说明及绝对最大额定值，供原理图设计参考。
+  </Card>
+  <Card title="寄存器参考" icon="book" href="/urm-upc/register-reference">
+    URM 指令集与寄存器映射详解，以及 UPC 外设寄存器完整地址表与位域描述。
+  </Card>
+  <Card title="驱动指南" icon="code" href="/urm-upc/driver-guide">
+    面向 C/C++ 的 HAL 驱动接口说明，包含初始化流程、读写示例代码及常见问题排查。
+  </Card>
+</CardGroup>

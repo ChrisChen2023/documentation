@@ -1,0 +1,90 @@
+---
+title: "ATOM AI 存算一体方案产品介绍"
+sidebarTitle: "产品介绍"
+description: "昕原半导体 ATOM 基于 eReRAM 存算一体架构，极低功耗实现边缘 AI 推理加速，支持 INT8/INT4 量化 CNN、轻量 Transformer 等模型。"
+---
+
+昕原半导体 ATOM 是一款面向边缘 AI 推理场景的存算一体（Computing-in-Memory，CIM）加速方案。ATOM 以 eReRAM（嵌入式阻变存储器）阵列同时承担权重存储与矩阵向量乘法运算，将深度神经网络中最耗能的线性计算直接在模拟域内完成，从根本上消除了传统 AI 芯片中存储器与计算单元之间反复搬运数据所带来的"内存墙"瓶颈。相较于 GPU 或通用 NPU 在边缘推理场景下的能效表现，ATOM 可实现 10 倍至 100 倍的能效提升，是对功耗与体积有严苛约束的工业、消费及物联网产品的理想选择。
+
+## 技术架构概览
+
+ATOM 的核心计算单元是由多组 eReRAM CIM 阵列构成的矩阵向量乘累加（MVM）引擎。每个 1T1R 存储单元以其电导值编码神经网络权重，输入激活值以电压脉冲形式施加于字线（Wordline），位线（Bitline）上感应到的电流之和即对应乘累加结果。这一过程天然并行、无需额外乘法器电路，使得计算能效远超数字域实现。
+
+<Info>
+  ATOM 目前支持 INT8 与 INT4 量化精度。INT4 模式下峰值算力翻倍，能效进一步提升，适合对精度要求相对宽松、对功耗极度敏感的应用。
+</Info>
+
+## 核心优势
+
+<CardGroup cols={3}>
+  <Card title="超低功耗" icon="bolt">
+    典型推理功耗 500mW，对比同等算力 GPU 方案节能 10x–100x，满足电池供电与无风扇散热设计需求。
+  </Card>
+  <Card title="极低延迟" icon="gauge-high">
+    MobileNetV2 单帧推理延迟仅 0.8ms，YOLOv5s 目标检测延迟 5.4ms，实现真正实时响应。
+  </Card>
+  <Card title="零带宽瓶颈" icon="microchip">
+    权重常驻片上 eReRAM，推理过程无需访问片外 DDR，彻底消除内存带宽瓶颈，延迟确定性极强。
+  </Card>
+</CardGroup>
+
+## 目标应用场景
+
+ATOM 方案已在以下典型边缘 AI 场景中完成验证，覆盖视觉、音频与传感器多模态推理需求：
+
+| 应用场景 | 代表模型 | 典型部署位置 |
+|---|---|---|
+| 图像分类 | MobileNetV2、ResNet-18 | 工业质检相机、门禁设备 |
+| 关键词检测（Keyword Spotting） | DS-CNN、GRU | 智能音箱、可穿戴设备 |
+| 异常检测 | Autoencoder MLP | 工业传感器节点、预测维护系统 |
+| 预测性维护 | LSTM、1D-CNN | 电机振动监测、泵组健康管理 |
+| 智能传感器融合 | 轻量 Transformer | 多传感器 IoT 网关、机器人末端节点 |
+
+## 产品形态
+
+昕原半导体为 ATOM 方案提供两种产品形态，分别面向量产集成与前期原型验证需求：
+
+<CardGroup cols={2}>
+  <Card title="ATOM-01 SoC 芯片" icon="chip" href="/atom/hardware-specs">
+    55nm CMOS 工艺，16 TOPS（INT4）峰值算力，FCLBGA-256 封装，10×10mm，适合直接贴片集成到客户产品 PCB。
+  </Card>
+  <Card title="ATOM-EVB 评估板" icon="circuit-board" href="/atom/hardware-specs">
+    100×80mm 开发板，集成 ATOM-01 与主机 MCU，提供 USB-C、MIPI CSI-2、以太网等接口，附预编译 Linux 镜像，开箱即用。
+  </Card>
+</CardGroup>
+
+## 支持的模型类型
+
+ATOM 编译器与运行时支持主流轻量化神经网络结构，并针对 CIM 阵列特性进行了算子映射优化：
+
+- **量化 CNN（INT8 / INT4）**：MobileNet 系列、ResNet 系列、EfficientNet、YOLOv5 等
+- **轻量 Transformer**：移动端视觉 Transformer（MobileViT-XS）、音频 Transformer
+- **循环网络（GRU / LSTM）**：时序传感器数据分类、关键词识别
+- **MLP / Autoencoder**：边缘异常检测、故障诊断
+
+<Note>
+  超过 50M 参数的大型模型（如 ResNet-50 全精度版本）需进行结构裁剪或分片部署，建议在模型转换前使用 `atom-compiler analyze` 评估参数量与片上存储适配情况。
+</Note>
+
+## 快速导航
+
+<CardGroup cols={3}>
+  <Card title="硬件规格" icon="list-check" href="/atom/hardware-specs">
+    ATOM-01 芯片完整参数表及 ATOM-EVB 评估板接口配置说明
+  </Card>
+  <Card title="快速上手" icon="rocket" href="/atom/quickstart">
+    10 分钟完成 EVB 上电、镜像烧录与首次推理 Demo 运行
+  </Card>
+  <Card title="SDK 安装" icon="wrench" href="/atom/sdk-setup">
+    在 Ubuntu 上安装 ATOM SDK、编译器与运行时环境
+  </Card>
+  <Card title="模型转换" icon="arrows-rotate" href="/atom/model-conversion">
+    将 ONNX/TFLite/PyTorch 模型转换为 ATOM 推理格式
+  </Card>
+  <Card title="推理 API" icon="code" href="/atom/inference-api">
+    C API 与 Python API 完整函数参考文档
+  </Card>
+  <Card title="性能基准" icon="chart-bar" href="/atom/performance-benchmarks">
+    主流模型在 ATOM-01 上的延迟、吞吐率与功耗数据
+  </Card>
+</CardGroup>

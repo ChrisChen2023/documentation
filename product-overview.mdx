@@ -1,0 +1,194 @@
+---
+title: "昕原半导体产品线总览与选型指南"
+sidebarTitle: "产品总览"
+description: "对比昕原半导体 eReRAM IP、URM/UPC 芯片及 ATOM AI 存算一体方案的核心参数、适用场景与选型建议，快速找到适合您需求的产品。"
+---
+
+昕原半导体围绕自主研发的嵌入式阻变存储（eReRAM）核心技术，构建了面向不同层次客户需求的三大产品线：提供给芯片设计团队的 **eReRAM IP**、面向系统和模块开发者的独立存储与微控制器芯片 **URM/UPC**，以及为 AI 边缘推理场景深度优化的存算一体完整方案 **ATOM**。本页将从产品定位、核心接口、典型应用等维度进行横向对比，并提供选型建议，帮助您快速锁定最适合自身需求的产品。
+
+## 三大产品线一览
+
+<CardGroup cols={3}>
+  <Card title="eReRAM IP" icon="microchip">
+    **类别**：嵌入式存储 IP
+
+    **目标用户**：SoC 芯片设计团队、IP 集成工程师
+
+    **关键接口**：AMBA APB / AHB / AXI，可按需定制
+
+    **典型应用**：微控制器 NVM、安全芯片、IoT SoC、工业级 MCU
+
+    将高密度 eReRAM 存储单元以标准 IP 形式交付，提供 GDS、网表、时序模型及完整验证套件，可无缝融入客户芯片设计流程。
+  </Card>
+  <Card title="URM / UPC 芯片" icon="memory">
+    **类别**：独立存储芯片 / 带存储 MCU
+
+    **目标用户**：系统工程师、模块与硬件设计工程师
+
+    **关键接口**：SPI、I²C、并行总线（PSRAM 兼容）
+
+    **典型应用**：工业控制器、智能电表、边缘网关、消费电子存储扩展
+
+    URM 为独立 eReRAM 存储芯片，UPC 在 URM 基础上集成 MCU 内核，两者均提供工业级宽温规格，Pin 布局兼容主流闪存封装。
+  </Card>
+  <Card title="ATOM AI 方案" icon="brain">
+    **类别**：AI 存算一体解决方案
+
+    **目标用户**：AI 算法工程师、边缘推理产品团队
+
+    **关键接口**：PCIe、USB 3.0、MIPI CSI、UART 调试口
+
+    **典型应用**：图像分类、目标检测、语音唤醒、工业视觉质检
+
+    以 eReRAM 阵列原生执行矩阵乘法，大幅降低推理能耗；配套 SDK、模型转换工具链与评估板，可快速完成从算法到部署的全流程验证。
+  </Card>
+</CardGroup>
+
+## 核心参数对比
+
+<Tabs>
+  <Tab title="eReRAM IP">
+    | 参数项 | 规格描述 |
+    |---|---|
+    | 工艺节点 | 40 nm、28 nm、22 nm（可按需支持其他节点） |
+    | 容量范围 | 64 Kbit – 16 Mbit，可配置多 bank |
+    | 工作电压 | 1.8 V / 3.3 V 核心可选 |
+    | 读取速度 | 随机读 ≤ 20 ns（典型值） |
+    | 写入耐久性 | ≥ 10⁶ 次擦写循环 |
+    | 数据保持 | 85 °C 下 ≥ 10 年 |
+    | 总线接口 | APB / AHB / AXI（可配置位宽） |
+    | 交付物 | GDS、网表、LIB、LEF、仿真模型、测试向量 |
+    | 安全特性 | 支持 TrustZone 分区、写保护寄存器 |
+  </Tab>
+  <Tab title="URM / UPC 芯片">
+    | 参数项 | URM（独立存储） | UPC（带 MCU） |
+    |---|---|---|
+    | 存储容量 | 1 Mbit – 64 Mbit | 512 Kbit – 8 Mbit |
+    | 接口类型 | SPI / I²C / 并行 | SPI + UART / I²C 主从 |
+    | 工作电压 | 1.8 V / 3.3 V | 3.3 V |
+    | 工作温度 | −40 °C ~ +105 °C | −40 °C ~ +85 °C |
+    | 封装 | SOP-8 / DFN-8 / WLCSP | QFN-32 / QFN-48 |
+    | 读速度 | 80 MHz（SPI x4） | 40 MHz（SPI） |
+    | 写耐久性 | ≥ 10⁶ 次 | ≥ 10⁶ 次 |
+    | 额外特性 | PSRAM 引脚兼容 | 内置 ADC、GPIO、定时器 |
+  </Tab>
+  <Tab title="ATOM AI 方案">
+    | 参数项 | 规格描述 |
+    |---|---|
+    | 推理算力 | 最高 8 TOPS（INT8 等效） |
+    | 功耗（推理） | 典型 < 3 W @ 满载 |
+    | 支持模型格式 | ONNX、TensorFlow Lite、PyTorch（需转换） |
+    | 片上存储 | eReRAM 权重存储 + SRAM 激活缓存 |
+    | 主机接口 | PCIe Gen3 x4 / USB 3.0 |
+    | 传感器接口 | MIPI CSI-2（最多 4 lane）、I²S |
+    | 评估板尺寸 | 80 mm × 55 mm（M.2 2280 可选） |
+    | SDK 支持 | Linux / RTOS，提供 Python / C++ API |
+    | 精度模式 | INT8 / INT16 / FP16 混合精度 |
+  </Tab>
+</Tabs>
+
+<Info>
+上述参数为典型规格，具体型号可能存在差异。请参阅各产品线的规格书页面，或联系销售团队获取完整数据手册。
+</Info>
+
+---
+
+## 产品选型指南
+
+在进入具体产品文档之前，请根据您的项目阶段与工程角色，参考以下指引快速缩小选择范围。
+
+<Tabs>
+  <Tab title="我在做芯片设计">
+    如果您的团队正在进行 SoC 或 ASIC 芯片设计，需要将非易失性存储集成到自有芯片内部，**eReRAM IP** 是唯一正确选项。
+
+    **选择 eReRAM IP 的典型信号**：
+    - 您拥有独立的芯片流片计划（28 nm / 40 nm 工艺）
+    - 需要将程序代码或配置数据固化在芯片内部
+    - 对数据安全或写保护有严格要求（安全芯片、金融 IC）
+    - 希望在芯片内完整控制 NVM 时序与 bank 映射
+
+    <Tip>
+    eReRAM IP 提供完整的 GDSII 交付与 DRC/LVS 签核支持，可直接对接主流代工厂 PDK。建议提前告知昕原半导体目标工艺节点及代工厂，以获得最匹配的 IP 版本。
+    </Tip>
+
+    → 前往 [eReRAM IP 产品简介](/ererem-ip/overview)
+  </Tab>
+  <Tab title="我在做系统/硬件设计">
+    如果您正在设计一块 PCB 或模块，需要外部存储器或一体化的存储+控制方案，请在 **URM** 与 **UPC** 之间选择。
+
+    | 场景 | 推荐型号 |
+    |---|---|
+    | 已有主控 MCU，只需扩展 NVM 存储 | **URM**（独立存储芯片） |
+    | 希望将存储与 MCU 合二为一，降低 BOM 成本 | **UPC**（带 MCU 的存储芯片） |
+    | 需要工业宽温（−40 °C ~ +105 °C） | **URM 工业级系列** |
+    | 替换现有 NOR Flash，追求更高写入寿命 | **URM**（PSRAM/Flash 引脚兼容版） |
+
+    <Note>
+    URM 的 SPI 接口版本与市面主流串行 NOR Flash 引脚兼容，在多数场景下可直接替换，无需重新布线。详情请参阅 [URM/UPC 引脚定义](/urm-upc/pinout)。
+    </Note>
+
+    → 前往 [URM/UPC 产品简介](/urm-upc/overview)
+  </Tab>
+  <Tab title="我在做 AI 边缘推理">
+    如果您的产品需要在本地（离线）完成图像、音频或传感器数据的 AI 推理，且对功耗、延迟或体积有严格约束，**ATOM AI 方案** 提供从硬件到软件的一站式支持。
+
+    **选择 ATOM 的典型信号**：
+    - 需要在嵌入式设备上运行 CNN / Transformer 等神经网络
+    - 云端推理延迟或带宽成本无法接受
+    - 功耗预算 < 5 W，或需要电池供电场景
+    - 希望缩短从模型训练到边缘部署的工程周期
+
+    <Tip>
+    ATOM SDK 支持直接导入 ONNX 格式模型，内置量化与图优化工具，通常可在半天内完成从 PC 端模型到 ATOM 板卡运行的完整流程。
+    </Tip>
+
+    → 前往 [ATOM 方案简介](/atom/overview)
+  </Tab>
+</Tabs>
+
+---
+
+## 应用场景
+
+<CardGroup cols={2}>
+  <Card title="IoT 智能节点" icon="wifi">
+    **推荐产品**：URM / UPC 芯片
+
+    智能家居传感器、资产追踪标签、智能门锁等 IoT 终端设备通常需要超低功耗与本地数据存储能力。URM 提供 SPI/I²C 接口与 1.8 V 低压工作模式，配合 MCU 即可构建完整的低功耗节点方案。UPC 进一步整合 MCU，可将节点 BOM 精简至极致。
+  </Card>
+  <Card title="工业控制与自动化" icon="industry">
+    **推荐产品**：URM 工业级 / eReRAM IP
+
+    PLC、电机驱动器、工业传感器等场景对存储的写入寿命、宽温可靠性和数据完整性要求极高。URM 工业级系列覆盖 −40 °C ~ +105 °C，提供 ≥ 10⁶ 次擦写保障。若需要将存储集成至自研工业控制 SoC，则选用 eReRAM IP。
+  </Card>
+  <Card title="AI 边缘推理加速" icon="brain">
+    **推荐产品**：ATOM AI 方案
+
+    智能摄像头、工业视觉质检、语音交互终端等场景需要在毫瓦级功耗下完成实时推理。ATOM 通过 eReRAM 阵列原生执行权重乘加运算，避免了传统 SRAM 方案的反复读写功耗，在同等精度下能耗比领先业界。
+  </Card>
+  <Card title="SoC 芯片定制设计" icon="microchip">
+    **推荐产品**：eReRAM IP
+
+    面向消费电子、通信、金融支付等领域的定制 SoC 芯片团队，可将 eReRAM IP 作为芯片内部的配置存储、密钥存储或 Bootloader NVM。IP 提供完整的 BIST/MBIST 支持，简化量产测试流程，并可配合 TrustZone 实现安全分区隔离。
+  </Card>
+</CardGroup>
+
+---
+
+## 产品线文档入口
+
+<CardGroup cols={3}>
+  <Card title="eReRAM IP 文档" icon="microchip" href="/ererem-ip/overview">
+    规格书、集成流程、接口描述、仿真与测试指南
+  </Card>
+  <Card title="URM / UPC 文档" icon="memory" href="/urm-upc/overview">
+    引脚定义、电气规格、寄存器参考与驱动开发指南
+  </Card>
+  <Card title="ATOM 方案文档" icon="brain" href="/atom/overview">
+    硬件规格、快速上手、SDK 配置与模型部署教程
+  </Card>
+</CardGroup>
+
+<Note>
+如需多产品线联合评估（例如：先用 ATOM 验证算法，后续将模型权重固化于自研 SoC 的 eReRAM IP 中），欢迎联系昕原半导体解决方案团队获取整体规划支持：**sales@xinyuansemi.com**
+</Note>

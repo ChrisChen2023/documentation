@@ -1,0 +1,356 @@
+---
+title: "eReRAM IP 时序约束与 SDC 配置指南"
+sidebarTitle: "时序约束"
+description: "eReRAM IP 时序参数表与 SDC 约束示例，涵盖 create_clock、set_input_delay、MMMC 多角设置及汽车级应用 derating 配置说明。"
+---
+
+正确的时序约束是 eReRAM IP 时序签核（Timing Sign-off）的基础。由于 eReRAM 内部同时包含数字控制逻辑与模拟编程电路，其时序行为在不同 PVT Corner 下的变化幅度大于标准数字宏单元——尤其是在高温低压（SS/1.62V/125°C）角下，读访问时间（tRD）与时钟到输出延迟（tCO）均会显著增大。若 SDC 约束设置不当，极易出现签核通过但量产失效的情形。本文系统说明 eReRAM IP 的关键时序参数、推荐 SDC 约束写法、MMMC 多视图配置策略，以及汽车级应用所需的额外 Derating 设置。
+
+## 关键时序参数
+
+下表列出 eReRAM IP 在典型工作条件（TT/1.8V/25°C）下的关键时序参数，以及在最坏角（SS/1.62V/125°C）下的规格限制值：
+
+| 参数符号 | 参数名称 | 典型值（TT/25°C） | 规格限制（SS/125°C） | 单位 | 备注 |
+|---|---|---|---|---|---|
+| tRD | 读访问时间（Read Access Time） | 6 ns | &lt;10 ns | ns | 从 `PCLK` 上升沿到 `PRDATA` 有效 |
+| tWR | 写周期时间（Write Cycle Time） | 2 μs | &lt;10 μs | μs | 从写命令发出到 `PREADY` 拉高 |
+| tSU | 输入建立时间（Setup Time） | 1.2 ns | 2 ns | ns | APB 输入信号相对 `PCLK` 上升沿 |
+| tH | 输入保持时间（Hold Time） | 0.3 ns | 0.5 ns | ns | APB 输入信号相对 `PCLK` 上升沿 |
+| tCO | 时钟到输出延迟（Clock-to-Output） | 1.8 ns | 3 ns（max） | ns | `PCLK` 上升沿到 `PRDATA`/`PREADY` 输出稳定 |
+
+<Note>
+  上述参数均基于昕原 28nm CMOS 工艺平台测试结果。若客户使用其他工艺节点的定制版本，实际参数以交付包中对应工艺角 `.lib` 文件为准。
+</Note>
+
+## SDC 约束示例
+
+以下 SDC（Synopsys Design Constraints）约束文件适用于 Synopsys PrimeTime、Cadence Tempus 等主流 STA 工具，覆盖时钟定义、输入/输出延迟、伪路径设置及宏单元保护约束。
+
+<CodeGroup>
+
+```tcl 时钟定义（create_clock）
+# ============================================================
+# 文件：ereram_constraints.sdc
+# 说明：eReRAM IP APB 接口时序约束
+# 适用工具：Synopsys PrimeTime / Cadence Tempus
+# ============================================================
+
+# 定义 APB 时钟：频率 100MHz，占空比 50%
+# 时钟源来自顶层时钟输入端口，经 CTS 后驱动 eReRAM PCLK
+create_clock \
+  -name PCLK \
+  -period 10.0 \
+  -waveform {0.0 5.0} \
+  [get_ports PCLK]
+
+# 设置时钟不确定度（Clock Uncertainty）
+# 包含 Jitter 与 Skew，用于时序裕量预留
+set_clock_uncertainty \
+  -setup 0.15 \
+  [get_clocks PCLK]
+
+set_clock_uncertainty \
+  -hold 0.05 \
+  [get_clocks PCLK]
+
+# 设置时钟延迟（用于 Pre-CTS 约束阶段）
+# CTS 完成后请使用实际传播延迟替换此设置
+set_clock_latency \
+  -source 0.2 \
+  [get_clocks PCLK]
+```
+
+```tcl 输入延迟（set_input_delay）
+# ============================================================
+# APB 输入信号延迟约束
+# 假设 APB 总线主机输出延迟（External Delay）为 2.0ns
+# Input Delay = External Delay + Interconnect Delay
+# ============================================================
+
+# APB 控制信号输入延迟（相对 PCLK 上升沿）
+set apb_input_ports [list \
+  PRESETn \
+  PSEL    \
+  PENABLE \
+  PWRITE  \
+  PADDR   \
+  PWDATA  \
+]
+
+set_input_delay \
+  -clock [get_clocks PCLK] \
+  -max 3.5 \
+  [get_ports $apb_input_ports]
+
+set_input_delay \
+  -clock [get_clocks PCLK] \
+  -min 0.8 \
+  [get_ports $apb_input_ports]
+
+# PRESETn 为异步复位信号，单独约束
+# 使用 set_false_path 而非 set_input_delay，避免路径分析误报
+set_false_path \
+  -from [get_ports PRESETn] \
+  -to   [get_cells u_ereram_top]
+```
+
+```tcl 输出延迟（set_output_delay）
+# ============================================================
+# APB 输出信号延迟约束
+# 下游模块（总线主机）的建立时间要求为 1.5ns
+# Output Delay = Downstream Setup + Interconnect Delay
+# ============================================================
+
+# PRDATA 读数据输出延迟
+set_output_delay \
+  -clock [get_clocks PCLK] \
+  -max 2.5 \
+  [get_ports PRDATA]
+
+set_output_delay \
+  -clock [get_clocks PCLK] \
+  -min -0.3 \
+  [get_ports PRDATA]
+
+# PREADY 就绪信号输出延迟
+set_output_delay \
+  -clock [get_clocks PCLK] \
+  -max 2.0 \
+  [get_ports PREADY]
+
+set_output_delay \
+  -clock [get_clocks PCLK] \
+  -min -0.2 \
+  [get_ports PREADY]
+
+# PSLVERR 错误标志输出延迟
+set_output_delay \
+  -clock [get_clocks PCLK] \
+  -max 2.0 \
+  [get_ports PSLVERR]
+```
+
+```tcl 伪路径与宏单元保护
+# ============================================================
+# VPP 相关路径设置为伪路径（False Path）
+# VPP 由内部倍压电路驱动，不属于同步数字时序路径
+# 设置 false_path 以避免 STA 工具对该网络进行无效的时序分析
+# ============================================================
+
+set_false_path \
+  -through [get_nets VPP] \
+  -comment "VPP 为内部模拟倍压输出，非同步数字路径"
+
+# 电源相关引脚设置为伪路径
+set_false_path -from [get_ports VDD]
+set_false_path -from [get_ports VDDIO]
+set_false_path -from [get_ports VSS]
+
+# ============================================================
+# 设置 dont_touch：保护 eReRAM 宏单元不被 ECO 工具修改
+# ============================================================
+set_dont_touch [get_cells u_ereram_top]
+set_dont_touch_network \
+  [get_pins u_ereram_top/PCLK] \
+  -comment "PCLK 树不允许工具自动插入 buffer"
+
+# ============================================================
+# 设置 eReRAM 宏单元内部路径为已签核（Annotated）
+# 告知 STA 工具不对宏单元内部逻辑进行重复分析
+# ============================================================
+set_annotated_delay \
+  -cell \
+  -from [get_pins u_ereram_top/PCLK] \
+  -to   [get_pins u_ereram_top/PRDATA] \
+  3.0 \
+  -comment "tCO max from .lib characterization"
+```
+
+</CodeGroup>
+
+## MMMC 多模式多角设置
+
+MMMC（Multi-Mode Multi-Corner）分析是确保 eReRAM IP 在全 PVT Corner 下均满足时序要求的标准做法。以下为 Cadence Innovus/Tempus MMMC 配置文件的完整示例：
+
+```tcl
+# ============================================================
+# 文件：mmmc_ereram_full.tcl
+# 说明：eReRAM IP 完整 MMMC 多角视图配置
+# 覆盖场景：功能模式（Func）下的 WCS Setup 与 WCH Hold
+# ============================================================
+
+# ----------------------------------------------------------
+# Step 1：定义时序库集合（Library Sets）
+# ----------------------------------------------------------
+create_library_set \
+  -name lib_set_ss_1v62_125c \
+  -timing [list \
+    /pdk/lib/stdcell_ss_1v62_125c.lib \
+    /ip/ereram/xys_ereram_1m_x32_ss_1v62_125c.lib \
+  ]
+
+create_library_set \
+  -name lib_set_tt_1v80_25c \
+  -timing [list \
+    /pdk/lib/stdcell_tt_1v80_25c.lib \
+    /ip/ereram/xys_ereram_1m_x32_tt_1v80_25c.lib \
+  ]
+
+create_library_set \
+  -name lib_set_ff_1v98_m40c \
+  -timing [list \
+    /pdk/lib/stdcell_ff_1v98_m40c.lib \
+    /ip/ereram/xys_ereram_1m_x32_ff_1v98_m40c.lib \
+  ]
+
+# ----------------------------------------------------------
+# Step 2：定义操作条件（RC Corner）
+# ----------------------------------------------------------
+create_rc_corner \
+  -name rc_worst \
+  -temperature 125 \
+  -qrc_tech /pdk/qrc/worst.tch
+
+create_rc_corner \
+  -name rc_best \
+  -temperature -40 \
+  -qrc_tech /pdk/qrc/best.tch
+
+create_rc_corner \
+  -name rc_typical \
+  -temperature 25 \
+  -qrc_tech /pdk/qrc/typical.tch
+
+# ----------------------------------------------------------
+# Step 3：定义延迟角（Delay Corners）
+# ----------------------------------------------------------
+create_delay_corner \
+  -name dc_wcs \
+  -library_set lib_set_ss_1v62_125c \
+  -rc_corner rc_worst
+
+create_delay_corner \
+  -name dc_wch \
+  -library_set lib_set_ff_1v98_m40c \
+  -rc_corner rc_best
+
+create_delay_corner \
+  -name dc_typ \
+  -library_set lib_set_tt_1v80_25c \
+  -rc_corner rc_typical
+
+# ----------------------------------------------------------
+# Step 4：定义约束模式（Constraint Modes）
+# ----------------------------------------------------------
+create_constraint_mode \
+  -name func_mode \
+  -sdc_files [list \
+    top_clocks.sdc \
+    ereram_constraints.sdc \
+    top_exceptions.sdc \
+  ]
+
+# ----------------------------------------------------------
+# Step 5：定义分析视图（Analysis Views）
+# ----------------------------------------------------------
+create_analysis_view \
+  -name av_wcs_setup \
+  -constraint_mode func_mode \
+  -delay_corner dc_wcs
+
+create_analysis_view \
+  -name av_wch_hold \
+  -constraint_mode func_mode \
+  -delay_corner dc_wch
+
+create_analysis_view \
+  -name av_typ \
+  -constraint_mode func_mode \
+  -delay_corner dc_typ
+
+# ----------------------------------------------------------
+# Step 6：激活分析视图
+# Setup 检查使用 WCS，Hold 检查使用 WCH
+# ----------------------------------------------------------
+set_analysis_view \
+  -setup [list av_wcs_setup] \
+  -hold  [list av_wch_hold]
+
+puts "MMMC 配置完成：Setup=WCS(SS/1.62V/125°C), Hold=WCH(FF/1.98V/-40°C)"
+```
+
+<Tip>
+  在执行 MMMC 时序签核后，建议使用 PrimeTime 的 `report_timing -max_paths 20 -path_type full_clock` 命令导出 eReRAM 相关的 Top 20 关键路径报告，重点检查经过 `PRDATA` 和 `PREADY` 输出端口的路径裕量是否 ≥ 0.2ns，以预留 ECO 余量。
+</Tip>
+
+## 汽车级应用 Derating 配置
+
+针对 **AEC-Q100 Grade 1**（工作温度范围 -40°C ～ +125°C）汽车级应用，时序签核需在标准 OCV（On-Chip Variation）Derating 基础上，额外叠加工艺均匀性（Process Uniformity）和辐射老化（Aging）引起的时序退化裕量。
+
+**推荐 Derating 系数（适用于 28nm 工艺节点）**
+
+| 分析类型 | 路径类型 | Derating 系数 | 说明 |
+|---|---|---|---|
+| Setup（max delay） | 数据路径（Late） | +5% | 慢角额外老化余量 |
+| Setup（max delay） | 时钟路径（Early） | -3% | 时钟偏早到达场景 |
+| Hold（min delay） | 数据路径（Early） | -5% | 快角额外变异余量 |
+| Hold（min delay） | 时钟路径（Late） | +3% | 时钟偏晚到达场景 |
+
+```tcl
+# ============================================================
+# 汽车级 OCV Derating 约束（AEC-Q100 Grade 1）
+# 在标准 MMMC 配置基础上叠加
+# ============================================================
+
+# Setup 分析（最坏角）：数据路径增加 5% 延迟
+set_timing_derate \
+  -late \
+  -data \
+  1.05 \
+  -comment "AEC-Q100 Grade 1 老化余量 +5%（Setup）"
+
+# Setup 分析（最坏角）：时钟路径减少 3% 延迟（时钟偏早）
+set_timing_derate \
+  -late \
+  -clock \
+  0.97 \
+  -comment "时钟路径早到场景（Setup）"
+
+# Hold 分析（最好角）：数据路径减少 5% 延迟
+set_timing_derate \
+  -early \
+  -data \
+  0.95 \
+  -comment "AEC-Q100 Grade 1 变异余量 -5%（Hold）"
+
+# Hold 分析（最好角）：时钟路径增加 3% 延迟（时钟偏晚）
+set_timing_derate \
+  -early \
+  -clock \
+  1.03 \
+  -comment "时钟路径晚到场景（Hold）"
+
+# 对 eReRAM 宏单元单独设置 Derating
+# 宏单元内部路径已通过 SPICE 级仿真表征，可适当放宽
+set_timing_derate \
+  -cell_check \
+  -late \
+  1.03 \
+  -of_objects [get_cells u_ereram_top] \
+  -comment "eReRAM 宏单元内部 Setup Derate（已含 SPICE 余量）"
+
+set_timing_derate \
+  -cell_check \
+  -early \
+  0.97 \
+  -of_objects [get_cells u_ereram_top] \
+  -comment "eReRAM 宏单元内部 Hold Derate"
+```
+
+<Warning>
+  汽车级项目在提交流片前，需将 STA 签核报告（含 Derating 配置截图及 WNS/TNS 汇总）提交昕原半导体 FAE 进行设计审查（Design Review）。昕原将对签核结果进行交叉验证，以确保符合 ISO 26262 功能安全要求。如有疑问，请联系 `automotive-support@xinyuan-semi.com`。
+</Warning>
+
+<Note>
+  对于需要满足更严格可靠性要求的场景（如 ASIL-B 及以上等级），昕原还提供带有 ECC（Error Correction Code）功能的 eReRAM IP 版本，可检测并纠正单比特错误（SEC-DED），相关时序参数请参阅 ECC 版本专项 Datasheet。
+</Note>

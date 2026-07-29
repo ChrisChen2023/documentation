@@ -1,0 +1,261 @@
+---
+title: "ATOM SDK 安装与开发环境配置指南"
+sidebarTitle: "SDK 安装"
+description: "在 Ubuntu 20.04/22.04 上安装 ATOM SDK、模型编译器及运行时，配置与 ATOM-EVB 的连接，快速搭建 AI 模型开发与部署环境。"
+---
+
+ATOM SDK 是昕原半导体为 ATOM 存算一体方案提供的完整软件开发工具包，涵盖模型编译器、推理运行时、Python 高层 API、C 底层 API、参考模型库及性能基准工具。本指南介绍如何在主机 Ubuntu 系统上完成 SDK 安装、开发环境配置及与 ATOM-EVB 评估板的连接，使工程师能够在主机上编译模型、在 EVB 上部署推理，实现完整的"主机开发—边缘部署"工作流。
+
+## SDK 组件概览
+
+| 组件 | 包名 | 说明 |
+|---|---|---|
+| 模型编译器 | `atom-compiler` | 将 ONNX/TFLite 模型转换为 ATOM 格式 |
+| 推理运行时 | `atomrt` | 设备端 C 运行时库（含驱动接口） |
+| Python SDK | `atom-sdk` | Python 高层 API，封装编译器与运行时 |
+| C SDK 头文件 | `atom-sdk-dev` | C API 头文件及静态/动态链接库 |
+| 命令行工具 | `atom-cli` | 设备管理、模型部署、状态监控 |
+| 参考模型库 | `atom-model-zoo` | 预转换的常用模型（.atom 格式） |
+| 基准测试工具 | 含于 `atom-sdk` | `atom-bench` 命令行基准测试 |
+
+## 系统要求
+
+在主机上安装 ATOM SDK 前，请确认满足以下环境要求：
+
+| 项目 | 最低要求 | 推荐配置 |
+|---|---|---|
+| 操作系统 | Ubuntu 20.04 LTS | Ubuntu 22.04 LTS |
+| Python 版本 | 3.8 | 3.10 |
+| 内存 (RAM) | 8GB | 16GB+ |
+| 磁盘空间 | 20GB | 40GB+ |
+| CPU 架构 | x86\_64 | x86\_64 |
+| 网络 | 安装阶段需互联网访问 | — |
+
+<Note>
+  ATOM SDK 目前仅支持 x86\_64 Linux 主机。Arm64（如 Apple Silicon、树莓派）原生安装暂不支持，但可通过 Docker 容器方式在非 x86 主机上使用（详见 SDK 发布说明）。Windows 主机请使用 WSL2（Ubuntu 22.04）。
+</Note>
+
+## 安装步骤
+
+<Steps>
+
+  ### 安装系统依赖
+
+  打开终端，更新 apt 索引并安装必要的系统级依赖：
+
+  ```bash
+  sudo apt update && sudo apt upgrade -y
+
+  sudo apt install -y \
+      python3-pip \
+      python3-venv \
+      python3-dev \
+      build-essential \
+      libusb-1.0-0-dev \
+      libopencv-dev \
+      libprotobuf-dev \
+      protobuf-compiler \
+      cmake \
+      git \
+      wget \
+      unzip
+  ```
+
+  ### 创建 Python 虚拟环境（推荐）
+
+  建议在独立虚拟环境中安装 ATOM SDK，避免与系统 Python 包产生冲突：
+
+  ```bash
+  python3 -m venv ~/atom-env
+  source ~/atom-env/bin/activate
+
+  # 升级 pip 至最新版本
+  pip install --upgrade pip setuptools wheel
+  ```
+
+  后续所有 `pip install` 命令均在此虚拟环境内执行。每次新开终端需重新激活环境：
+
+  ```bash
+  source ~/atom-env/bin/activate
+  ```
+
+  ### 添加昕原 SDK 软件源并安装 atom-compiler
+
+  `atom-compiler` 以 apt 包形式分发，需先添加昕原软件源：
+
+  ```bash
+  # 导入昕原 GPG 签名密钥
+  wget -qO - https://packages.xinyuan-semi.com/gpg.key | sudo apt-key add -
+
+  # 添加 apt 软件源
+  echo "deb [arch=amd64] https://packages.xinyuan-semi.com/apt stable main" \
+      | sudo tee /etc/apt/sources.list.d/xinyuan-atom.list
+
+  sudo apt update
+
+  # 安装模型编译器
+  sudo apt install -y atom-compiler
+  ```
+
+  ### 安装 atom-sdk Python 包
+
+  ```bash
+  # 从昕原 PyPI 镜像安装（需配置访问凭据，见 support.xinyuan-semi.com 账户设置）
+  pip install atom-sdk \
+      --extra-index-url https://pypi.xinyuan-semi.com/simple/ \
+      --trusted-host pypi.xinyuan-semi.com
+
+  # 同时安装常用依赖（推理开发常用）
+  pip install numpy onnx onnxruntime opencv-python Pillow
+  ```
+
+  <Tip>
+    若所在网络无法访问昕原 PyPI，请联系技术支持获取离线 wheel 包（`atom_sdk-1.2.0-cp310-cp310-linux_x86_64.whl`），使用 `pip install atom_sdk-*.whl` 本地安装。
+  </Tip>
+
+  ### 验证安装
+
+  运行以下命令确认 SDK 各组件已正确安装：
+
+  ```bash
+  # 检查 Python SDK 版本
+  atom-sdk --version
+  ```
+
+  ```
+  ATOM SDK 1.2.0
+  atom-compiler: 1.2.0
+  atomrt runtime: 1.2.0
+  Python: 3.10.12
+  Platform: Linux-5.15.0-x86_64
+  ```
+
+  ```bash
+  # 检查模型编译器
+  atom-compiler --version
+  ```
+
+  ```
+  atom-compiler 1.2.0 (build 20240601)
+  Supported formats: ONNX 1.14, TFLite 2.12
+  Target: ATOM-01
+  ```
+
+  ```bash
+  # 检查 Python API 可导入
+  python3 -c "import atom_sdk; print('atom_sdk OK, version:', atom_sdk.__version__)"
+  ```
+
+  ```
+  atom_sdk OK, version: 1.2.0
+  ```
+
+</Steps>
+
+## SDK 目录结构
+
+安装完成后，SDK 相关文件分布如下：
+
+```
+/usr/lib/atom/                  # atom-compiler 主程序及内置规则
+/usr/include/atom/              # C API 头文件（atom_runtime.h 等）
+/usr/lib/libatomrt.so           # atomrt 共享库
+/usr/lib/libatomrt.a            # atomrt 静态库
+
+~/atom-env/lib/python3.10/site-packages/atom_sdk/
+├── __init__.py                 # 顶层 API（Compiler, Runtime, Tensor）
+├── compiler/                   # 模型编译器 Python 封装
+├── runtime/                    # 运行时 Python 封装
+├── tools/                      # atom-sdk CLI 入口
+└── models/                     # 内置示例模型（ONNX 格式）
+    ├── mobilenetv2_int8.onnx
+    ├── resnet18_int8.onnx
+    └── ds_cnn_int4.onnx
+```
+
+## 配置与 ATOM-EVB 的连接
+
+ATOM SDK 支持通过 **以太网（推荐）** 或 **USB** 两种方式连接 ATOM-EVB，用于模型部署与远程推理调用。
+
+<CodeGroup>
+
+```bash 以太网连接配置
+# 将 ATOM-EVB 通过 RJ45 接入同一局域网，查询其 IP 地址
+# （在 EVB 串口终端内执行：ip addr show eth0）
+
+# 在主机上配置 EVB 连接
+atom-cli remote add evb-01 --host 192.168.1.100 --port 7788
+
+# 测试连接
+atom-cli remote ping evb-01
+# 输出：evb-01 (192.168.1.100:7788) — OK, latency 1.2ms
+
+# 设为默认目标设备
+atom-cli remote set-default evb-01
+```
+
+```bash USB 连接配置
+# 通过 USB-C 线连接 ATOM-EVB（确保不处于烧录 UMS 模式）
+# EVB 在 USB 连接时会在主机上枚举为 RNDIS/ECM 网络设备
+
+# 查看 USB 网络接口
+ip link show | grep usb
+
+# 通常分配到 192.168.100.x 网段（EVB 地址为 192.168.100.2）
+atom-cli remote add evb-usb --host 192.168.100.2 --port 7788
+
+# 测试连接
+atom-cli remote ping evb-usb
+```
+
+</CodeGroup>
+
+## 快速测试：编译并部署 Demo ONNX 模型
+
+以下步骤演示完整的"主机编译—EVB 部署—执行推理"工作流：
+
+```bash
+# 1. 使用 SDK 内置的示例 ONNX 模型（MobileNetV2 INT8）
+MODEL_SRC=$(python3 -c "import atom_sdk; import os; \
+    print(os.path.join(os.path.dirname(atom_sdk.__file__), \
+    'models/mobilenetv2_int8.onnx'))")
+
+# 2. 编译为 ATOM 格式
+atom-compiler convert \
+    --input  "$MODEL_SRC" \
+    --output /tmp/mobilenetv2_test.atom \
+    --precision int8
+
+# 输出示例：
+# [atom-compiler] Loading ONNX model: mobilenetv2_int8.onnx
+# [atom-compiler] Graph optimization: fold_bn, fuse_relu ... done
+# [atom-compiler] Mapping 52 layers to 16 CIM arrays
+# [atom-compiler] eReRAM usage: 1.8MB / 8MB (22.5%)
+# [atom-compiler] Compilation successful: /tmp/mobilenetv2_test.atom
+
+# 3. 部署到 EVB 并执行一次推理验证
+atom-cli deploy /tmp/mobilenetv2_test.atom --device evb-01
+atom-cli infer --model mobilenetv2_test \
+               --input "$(python3 -c "import atom_sdk; import os; \
+    print(os.path.join(os.path.dirname(atom_sdk.__file__), \
+    'models/../tests/cat.jpg'))")" \
+               --device evb-01
+
+# 输出示例：
+# Top-1: tabby_cat     (94.7%)
+# Top-2: tiger_cat     (3.2%)
+# Latency: 0.82ms | Power: 483mW
+```
+
+<Note>
+  SDK 安装完成后，建议运行 `atom-sdk selftest` 执行完整的 SDK 自检，验证编译器、运行时与 EVB 连接均正常。自检报告将保存至 `~/atom-sdk-selftest.log`。
+</Note>
+
+## 常见安装问题
+
+| 问题现象 | 可能原因 | 解决方案 |
+|---|---|---|
+| `pip install atom-sdk` 提示 403 | PyPI 凭据未配置 | 在技术支持门户账户设置中生成访问令牌，按提示配置 `~/.pip/pip.conf` |
+| `atom-compiler: command not found` | apt 安装失败或 PATH 未更新 | 重新执行 `sudo apt install atom-compiler`，或重启终端刷新 PATH |
+| EVB 连接超时 | 防火墙阻止 7788 端口 | `sudo ufw allow 7788/tcp` 或检查路由器 ACL |
+| `libatomrt.so: not found` | 动态库路径未更新 | `sudo ldconfig` 刷新动态库缓存 |

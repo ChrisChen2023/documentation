@@ -1,0 +1,267 @@
+---
+title: "ATOM AI 存算一体方案常见问题解答"
+sidebarTitle: "常见问题"
+description: "解答 ATOM 与 GPU/NPU 对比优势、AI 框架支持、量化精度影响、摄像头接入、SDK 获取、自定义 PCB 设计及量产服务等常见问题。"
+---
+
+本页汇集了工程师在评估与开发 ATOM 存算一体方案过程中最常见的技术与商务问题，并提供详尽解答。如您的问题未在本页列出，欢迎通过昕原半导体技术支持门户（[support.xinyuan-semi.com](https://support.xinyuan-semi.com)）提交工单，或发送邮件至 [atom-support@xinyuan-semi.com](mailto:atom-support@xinyuan-semi.com) 联系技术支持团队。
+
+<AccordionGroup>
+
+  <Accordion title="ATOM 与 GPU/NPU 相比有哪些优势？适合什么场景？">
+    ATOM 与 GPU/NPU 的核心差异在于计算范式：传统 GPU/NPU 将权重存储在 DRAM 或 SRAM 中，每次推理都需要将权重数据从存储器搬运至乘法器阵列，产生大量"内存墙"功耗；ATOM 的 eReRAM CIM 阵列将权重直接编码为存储单元的电导值，矩阵向量乘法在模拟域内原位完成，权重数据无需移动。
+
+    **能效对比：**
+
+    | 指标 | 典型 GPU（边缘） | 典型 NPU（边缘） | ATOM-01 |
+    |---|---|---|---|
+    | ResNet-18 延迟 | ~10ms | ~3ms | **2.1ms** |
+    | ResNet-18 功耗 | ~3000mW | ~800mW | **510mW** |
+    | 片外内存带宽需求 | 高（LPDDR4） | 中（SRAM） | **零**（权重片上） |
+
+    **ATOM 最适合的场景：**
+    - **电池供电设备**：智能可穿戴、工业无线传感器节点，功耗预算 < 1W
+    - **无散热设计**：密封工业外壳、防爆设备，无法主动散热
+    - **高实时性要求**：工业控制闭环，P99 延迟抖动需 < 500μs
+    - **常开推理（Always-on）**：门禁、烟雾检测等需要 24×7 运行的场景
+
+    **ATOM 相对不适合的场景：**
+    - 需要 FP16/BF16 全精度训练或微调（ATOM 仅支持推理）
+    - 模型参数量超过 100M（受片上 eReRAM 容量限制）
+    - 需要频繁更换模型（每次切换模型需约 200ms eReRAM 编程时间）
+  </Accordion>
+
+  <Accordion title="ATOM 支持哪些 AI 框架（PyTorch / TensorFlow / ONNX）？">
+    ATOM `atom-compiler` 的**原生输入格式**为 **ONNX**（推荐，opset 11–17）和 **TFLite**（FlatBuffer 格式）。主流 AI 框架均可通过官方导出工具转换至这两种格式：
+
+    **PyTorch → ONNX：**
+
+    ```python
+    import torch
+
+    model.eval()
+    dummy_input = torch.randn(1, 3, 224, 224)
+
+    torch.onnx.export(
+        model,
+        dummy_input,
+        'model.onnx',
+        opset_version=17,
+        input_names=['input'],
+        output_names=['output'],
+        dynamic_axes=None    # 固定 shape，不使用动态轴
+    )
+    ```
+
+    **TensorFlow / Keras → TFLite：**
+
+    ```python
+    converter = tf.lite.TFLiteConverter.from_saved_model('saved_model/')
+    converter.optimizations = [tf.lite.Optimize.DEFAULT]
+    tflite_model = converter.convert()
+    with open('model.tflite', 'wb') as f:
+        f.write(tflite_model)
+    ```
+
+    **PaddlePaddle → ONNX：**  通过 `paddle2onnx` 工具（`pip install paddle2onnx`）导出后，走 ONNX 转换路径。
+
+    **MindSpore → ONNX：**  通过 MindSpore 的 `export()` 接口指定 `file_format='ONNX'` 导出。
+
+    <Note>
+      无论何种来源框架，转换为 ATOM 格式前模型均须完成 INT8 或 INT4 量化。ATOM 不支持直接推理 FP32 模型，`atom-compiler` 在检测到未量化模型时会自动应用训练后量化（PTQ），但建议使用框架原生量化工具获得更好的精度。
+    </Note>
+  </Accordion>
+
+  <Accordion title="量化精度 INT4 和 INT8 对模型精度影响有多大？">
+    在充分的校准数据集（200 张以上代表性样本）下，昕原内部测试各主流模型精度损失如下：
+
+    | 模型 | FP32 基线 | INT8 精度 | INT8 损失 | INT4 精度 | INT4 损失 |
+    |---|---|---|---|---|---|
+    | MobileNetV2 | 72.0% | 71.8% | −0.2% | 71.1% | −0.9% |
+    | ResNet-18 | 69.8% | 69.5% | −0.3% | 68.9% | −0.9% |
+    | EfficientNet-B0 | 77.1% | 76.7% | −0.4% | 76.0% | −1.1% |
+    | YOLOv5s（mAP@0.5） | 56.8% | 56.2% | −0.6% | 55.3% | −1.5% |
+    | DS-CNN（准确率） | 95.4% | 95.2% | −0.2% | 95.0% | −0.4% |
+
+    **影响量化精度的关键因素：**
+    1. **校准数据集质量**：校准集越贴近实际部署数据分布，精度越高；避免使用与推理分布差异过大的校准图片
+    2. **模型结构**：残差连接（ResNet 类）、通道数较少的层（MobileNet 最后几层）对量化误差更敏感
+    3. **校准方法**：`kl_divergence` 或 `percentile (99.99%)` 方法通常优于 `minmax`
+    4. **INT4 的适用边界**：对精度容忍度 > 1% 的应用可放心使用 INT4；用于医疗或安全关键场景时，建议保持 INT8 并进行充分验证
+
+    如 INT4 精度损失超过预期，可尝试以下优化措施：
+    - 增加校准数据集至 500 张以上
+    - 对精度敏感层（如最终分类层）单独设置 INT8，其余层使用 INT4（混合精度，通过 `CompileConfig` 的 `layer_precision_map` 参数配置）
+    - 使用量化感知训练（QAT）代替训练后量化（PTQ）
+  </Accordion>
+
+  <Accordion title="ATOM-EVB 能否连接摄像头进行实时视频推理？">
+    **可以。** ATOM-EVB 板载 **MIPI CSI-2 接口**（4-lane，FPC 排线，兼容树莓派摄像头 FPC 规格），随套装附带的 OV5647 摄像头模块最高支持 1080p@30fps 视频输入。
+
+    **连接步骤：**
+
+    1. 将摄像头 FPC 排线插入 ATOM-EVB 的 CSI-2 接口（金手指朝向 PCB 内侧）
+    2. 通过串口或 SSH 登录 EVB，验证摄像头已被识别：
+
+    ```bash
+    ls /dev/video*
+    # 输出：/dev/video0
+
+    v4l2-ctl --device /dev/video0 --list-formats-ext
+    # 将列出支持的分辨率与帧率
+    ```
+
+    3. 直接运行实时推理 Demo：
+
+    ```bash
+    # ResNet-18 实时分类
+    atom-demo --model resnet18-int8 --input /dev/video0
+
+    # YOLOv5s 实时目标检测
+    atom-demo --model yolov5s-int8 --input /dev/video0 --display
+    ```
+
+    **Python API 摄像头推理示例：**
+
+    ```python
+    import cv2
+    import numpy as np
+    from atom_sdk import Runtime
+
+    rt    = Runtime(device='atom0')
+    model = rt.load('/opt/models/resnet18.atom')
+    cap   = cv2.VideoCapture(0)
+
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+        # 预处理：resize → BGR2RGB → normalize → NCHW
+        x = cv2.resize(frame, (224, 224))[:, :, ::-1].astype(np.float32) / 255.0
+        x = ((x - [0.485, 0.456, 0.406]) / [0.229, 0.224, 0.225])
+        x = x.transpose(2, 0, 1)[np.newaxis]
+        output = model.infer(x)
+        print(f"Top-1: {np.argmax(output)}")
+    cap.release()
+    ```
+
+    <Note>
+      若使用第三方摄像头模块（非 OV5647），需确认 MIPI CSI-2 协议版本兼容性，并可能需要修改设备树配置。相关指导请参考 ATOM-EVB 用户手册附录 B。
+    </Note>
+  </Accordion>
+
+  <Accordion title="如何获取 ATOM SDK 和模型库下载权限？">
+    ATOM SDK 及配套资源通过昕原半导体技术支持门户分发，获取流程如下：
+
+    **步骤一：账号注册**
+    访问 [support.xinyuan-semi.com](https://support.xinyuan-semi.com)，使用企业邮箱注册账号（不支持个人邮箱域名如 gmail.com、qq.com）。
+
+    **步骤二：产品关联**
+    登录后进入"我的产品"页面，提交 ATOM-EVB 评估板序列号（位于 EVB 背面标签，格式：`ATOM-EVB-XXXXXX`）进行产品关联。评估套装客户系统会自动激活 SDK 下载权限，通常在 1 个工作日内完成审核。
+
+    **步骤三：下载资源**
+    权限激活后，可在技术支持门户"资源中心"下载：
+    - ATOM SDK（离线 wheel 包、apt 仓库访问凭据）
+    - 系统镜像（EVB Linux Image）
+    - 预转换模型库（atom-model-zoo，含 20+ 常用模型）
+    - 数据手册、硬件设计指南（需实名认证）
+    - 硬件原理图（需签署 NDA）
+
+    **如未购买评估板：**  可联系昕原销售申请免费评估授权（Evaluation License），提供公司信息、应用场景描述及预期用量即可申请 90 天试用资格。
+
+    <Note>
+      模型库中的模型均已针对 ATOM-01 完成量化与编译优化，可直接用 `atom-cli deploy` 部署，无需重新编译，适合快速验证应用可行性。
+    </Note>
+  </Accordion>
+
+  <Accordion title="ATOM-01 能否在自定义 PCB 上使用（非 EVB）？">
+    **可以，且这是 ATOM-01 面向量产设计的主要使用方式。** ATOM-01 采用 FCLBGA-256 封装（10×10mm，0.65mm Ball Pitch），可直接贴片至客户自定义产品 PCB。以下是自定义 PCB 设计的关键注意事项：
+
+    **供电设计要求：**
+    - 核心供电（VCORE 1.0V）：需使用纹波 < 10mV 的 DC-DC 转换器，瞬态响应满足 100mV/μs
+    - 模拟供电（VANA 2.5V）：**必须使用独立 LDO**，不可与数字供电共用，噪声需 < 500μV RMS
+    - 去耦电容：每个 VCORE/VANA/VIO 管脚须并联 100nF + 10μF 组合电容，尽量靠近管脚放置
+
+    **PCB 设计要求：**
+    - PCB 层数：最少 4 层（建议 6 层用于高速 PCIe/USB 差分对走线）
+    - PCIe / USB 差分对：严格控制等长、间距，阻抗 85Ω（差分）
+    - BGA 扇出：推荐 0.1mm 盲孔或 HDI 微孔工艺
+
+    **软件移植：**
+    - 将 ATOM-EVB 配套的 Linux 内核驱动（`atom_drv.ko`）移植至目标 SoC 平台
+    - 若目标平台无 Linux（裸机/RTOS），可使用 `atomrt` C 库的裸机版本（`libatomrt_bare.a`，需联系技术支持申请）
+    - 驱动移植支持：昕原提供 BSP 移植服务，周期约 4~8 周
+
+    详细 PCB 设计规范请下载《ATOM-01 硬件设计指南》（文档编号 HW-DG-001，技术支持门户登录后可获取）。量产芯片采购请联系昕原销售团队（[sales@xinyuan-semi.com](mailto:sales@xinyuan-semi.com)）获取报价与交期信息。
+  </Accordion>
+
+  <Accordion title="eReRAM 权重存储掉电后数据会丢失吗？多久可以更新权重？">
+    **eReRAM 是非易失性存储器，掉电后数据完全保留，无需上电重新编程**。这是 ATOM 相比使用 SRAM 存储权重的传统 NPU 的重要优势之一，特别适合以下场景：
+    - **低功耗唤醒推理**：设备长期掉电休眠，唤醒后无需等待模型加载，首帧推理延迟仅为正常推理延迟
+    - **断电保护**：突发断电不会导致模型丢失，重新上电后立即可用
+    - **离线部署**：出厂前预烧录模型，现场无需网络连接即可工作
+
+    **eReRAM 数据保留特性：**
+
+    | 参数 | 规格 |
+    |---|---|
+    | 数据保留寿命 | > 10 年 @ 85°C（符合 JEDEC 标准） |
+    | 写入耐久次数 | > 10⁶ 次擦写循环 |
+    | 掉电数据保留 | 100%（非易失） |
+
+    **权重更新（模型切换）流程：**
+
+    1. 通过 PCIe Gen3 ×4 或 USB 3.0 接口传输新的 `.atom` 模型文件
+    2. `atomrt` 运行时调用驱动对 eReRAM 进行擦写，将新权重编程至阵列
+    3. 编程完成后新模型立即可用
+
+    **典型更新耗时：**
+
+    | 模型大小 | 更新时间（PCIe Gen3 ×4） | 更新时间（USB 3.0） |
+    |---|---|---|
+    | 1MB（MobileNetV2 INT8） | ~25ms | ~50ms |
+    | 4MB（ResNet-18 INT8） | ~100ms | ~200ms |
+    | 8MB（满载） | ~200ms | ~400ms |
+
+    <Note>
+      在更新权重（eReRAM 编程）期间，ATOM-01 无法执行推理。如应用要求推理不中断，可采用"双模型分区"策略：将 eReRAM 划分为两个 4MB 区域，在后台更新备用区，完成后原子切换至新模型分区（此高级特性需使用 `atomrt` 高级 API，详见 SDK 文档）。
+    </Note>
+  </Accordion>
+
+  <Accordion title="ATOM 方案是否提供技术支持和量产服务？">
+    昕原半导体为 ATOM 方案提供完整的技术支持与量产服务体系，覆盖从原型评估到大批量量产的全生命周期。
+
+    **技术支持层级：**
+
+    | 支持级别 | 适用阶段 | 响应时间 | 获取方式 |
+    |---|---|---|---|
+    | 标准支持 | 评估与开发阶段 | 2 个工作日内 | 技术支持门户工单 |
+    | 优先支持 | 设计定型阶段 | 4 小时内 | 签署优先支持协议 |
+    | 专项支持 | 量产导入阶段 | 驻场/远程协同 | 联系销售团队定制 |
+
+    **技术服务项目：**
+    - **模型优化服务**：昕原 AI 工程师协助进行模型量化、裁剪与精度优化，确保目标准确率达标
+    - **BSP 移植服务**：协助将 ATOM 驱动与 SDK 移植至客户自定义 SoC/主控平台
+    - **硬件设计审查（DFM Review）**：对客户 PCB 设计进行 ATOM-01 相关电路审查，出具设计建议报告
+    - **量产测试方案**：提供 ATE 测试向量与 JTAG 测试固件，支持量产在线编程（ISP）方案
+
+    **量产芯片采购：**
+    - 样片（< 100pcs）：技术支持门户申请，通常 2 周内发货
+    - 小批（100~1000pcs）：联系昕原销售，提前 6 周下单
+    - 量产（> 1000pcs）：签署框架采购协议，交期视产能情况协商
+
+    **联系方式：**
+
+    | 渠道 | 联系信息 |
+    |---|---|
+    | 技术支持工单 | [support.xinyuan-semi.com](https://support.xinyuan-semi.com) |
+    | 技术支持邮箱 | atom-support@xinyuan-semi.com |
+    | 销售咨询邮箱 | sales@xinyuan-semi.com |
+    | 微信技术群 | 购买评估板后扫码加入（EVB 包装内附二维码） |
+
+    <Tip>
+      建议所有新客户在采购 ATOM-EVB 评估板后第一时间注册技术支持账号并加入微信技术群，可获得昕原工程师的实时技术答疑，以及新版本 SDK、模型库、勘误表的第一时间推送通知。
+    </Tip>
+  </Accordion>
+
+</AccordionGroup>

@@ -1,0 +1,179 @@
+---
+title: "URM 存储指令集与 UPC MCU 存储空间映射"
+sidebarTitle: "存储映射"
+description: "URM 芯片 SPI 指令集（含 opcode）、地址空间分配，以及 UPC MCU 完整存储映射表（Flash、SRAM、外设、系统区域），供固件开发参考。"
+---
+
+本节详细描述 URM 系列存储芯片的地址空间划分与 SPI 指令集，以及 UPC 系列 MCU 的完整存储映射架构。无论是开发 URM 的主机驱动程序，还是为 UPC MCU 编写裸机固件或移植 RTOS，理解底层地址布局和指令编码均是必要前提。固件开发者应结合链接脚本（linker script）与本节存储映射表共同使用。
+
+## URM 芯片地址空间分配
+
+URM 系列芯片采用字节寻址方式，地址连续递增，无页内对齐限制（支持跨页连续写入）。不同容量型号的地址范围如下：
+
+| 型号 | 容量 | 地址起始 | 地址结束 | 总字节数 |
+|------|------|----------|----------|----------|
+| URM0401 | 4 Kb（512 B） | `0x0000` | `0x01FF` | 512 |
+| URM1601 | 16 Kb（2 KB） | `0x0000` | `0x07FF` | 2,048 |
+| URM3201 | 32 Kb（4 KB） | `0x0000` | `0x0FFF` | 4,096 |
+| URM6401 | 64 Kb（8 KB） | `0x0000` | `0x1FFF` | 8,192 |
+| URM12801 | 128 Kb（16 KB） | `0x0000` | `0x3FFF` | 16,384 |
+
+<Note>
+  URM 芯片的字节写入操作无需预先擦除（不同于 NOR Flash 的"写前擦除"流程），可直接对任意字节地址执行覆盖写入。这是 URM 基于 eReRAM 技术的关键优势之一，可显著简化驱动逻辑并延长器件寿命。
+</Note>
+
+### 地址格式说明
+
+SPI READ / WRITE 指令中地址字段的位宽根据容量型号有所不同：
+
+```text
+URM0401 / URM1601：  使用 8 位地址（1 字节地址字段）
+URM3201 / URM6401：  使用 16 位地址（2 字节地址字段）
+URM12801 及以上：    使用 24 位地址（3 字节地址字段）
+
+地址字节传输顺序：MSB 在前（大端序）
+示例（URM6401，读地址 0x1A3C）：
+  CMD     ADDR_HIGH  ADDR_LOW   DATA...
+  0x03      0x1A       0x3C     [byte0] [byte1] ...
+```
+
+## URM 芯片 SPI 指令集
+
+URM 芯片通过标准 SPI 总线进行操作，所有指令均以单字节 opcode 开头，后跟可选地址字段与数据字节。指令在 CS# 低电平期间有效，CS# 上升沿时终止当前操作。
+
+| 指令名称 | Opcode | 说明 |
+|----------|--------|------|
+| READ | `0x03` | 读取数据，支持从指定地址起连续读取任意字节数 |
+| WRITE | `0x02` | 写入数据，字节级写入，无需擦除操作 |
+| WREN | `0x06` | 写使能锁存器（WEL）置位，执行任何写操作前必须先发送此指令 |
+| WRDI | `0x04` | 写使能锁存器（WEL）清除，禁止后续写操作 |
+| RDSR | `0x05` | 读取状态寄存器（1 字节） |
+| WRSR | `0x01` | 写状态寄存器（需先执行 WREN） |
+| RDID | `0x9F` | 读取设备识别码（制造商 ID + 设备类型 + 容量 ID） |
+| DPD | `0xB9` | 进入深度掉电模式（Deep Power-Down），降低静态功耗 |
+| RDP | `0xAB` | 退出深度掉电模式（Release from Deep Power-Down） |
+
+<Warning>
+  执行 WRITE 或 WRSR 指令之前，**必须**先发送 WREN（`0x06`）指令将写使能锁存器置位。每次写操作完成（CS# 拉高）后，WEL 位将自动清零，下次写入前需重新发送 WREN。忽略此步骤将导致写操作静默失败，数据不会被更改。
+</Warning>
+
+### 典型 SPI 读写时序示例
+
+```c
+/* 连续读取示例（以 URM6401 为例，从地址 0x0010 读取 4 字节） */
+void urm_read(uint16_t addr, uint8_t *buf, uint16_t len)
+{
+    CS_LOW();
+    spi_transfer(0x03);               /* READ opcode */
+    spi_transfer((addr >> 8) & 0xFF); /* 地址高字节 */
+    spi_transfer(addr & 0xFF);        /* 地址低字节 */
+    for (uint16_t i = 0; i < len; i++) {
+        buf[i] = spi_transfer(0x00);  /* 发送哑字节，接收数据 */
+    }
+    CS_HIGH();
+}
+
+/* 字节写入示例（写入单字节到地址 0x0010） */
+void urm_write_byte(uint16_t addr, uint8_t data)
+{
+    CS_LOW();
+    spi_transfer(0x06);               /* WREN：写使能 */
+    CS_HIGH();
+
+    CS_LOW();
+    spi_transfer(0x02);               /* WRITE opcode */
+    spi_transfer((addr >> 8) & 0xFF);
+    spi_transfer(addr & 0xFF);
+    spi_transfer(data);
+    CS_HIGH();
+
+    /* 等待写操作完成：轮询 RDSR 的 WIP 位 */
+    uint8_t sr;
+    do {
+        CS_LOW();
+        spi_transfer(0x05);           /* RDSR opcode */
+        sr = spi_transfer(0x00);
+        CS_HIGH();
+    } while (sr & 0x01);              /* WIP = 1 表示写入进行中 */
+}
+```
+
+## URM 状态寄存器位域说明
+
+通过 RDSR（`0x05`）指令可读取 8 位状态寄存器，各位含义如下：
+
+| 位 | 名称 | 访问 | 说明 |
+|----|------|------|------|
+| 0 | WIP | 只读 | Write In Progress，写操作进行中为 1，完成后自动清零 |
+| 1 | WEL | 只读 | Write Enable Latch，WREN 后为 1，写完或 WRDI 后为 0 |
+| 2 | BP0 | 读写 | Block Protect 位 0，与 BP1 组合决定写保护区域 |
+| 3 | BP1 | 读写 | Block Protect 位 1，具体保护范围见下表 |
+| 4–6 | — | — | 保留位，读出值不确定，写入应置 0 |
+| 7 | SRWD | 读写 | Status Register Write Disable，为 1 且 WP# 低电平时锁定状态寄存器 |
+
+**BP0/BP1 写保护范围（以 URM6401 为例）：**
+
+| BP1 | BP0 | 写保护区域 |
+|-----|-----|------------|
+| 0 | 0 | 无保护（全部可写） |
+| 0 | 1 | 保护上 1/4（地址 0x1800–0x1FFF） |
+| 1 | 0 | 保护上 1/2（地址 0x1000–0x1FFF） |
+| 1 | 1 | 保护全部（地址 0x0000–0x1FFF） |
+
+<Info>
+  SRWD 位须配合硬件 WP#（写保护）引脚共同使用。当 SRWD = 1 且 WP# 引脚被拉低时，状态寄存器本身也无法通过 WRSR 修改，实现双重保护。若系统不使用硬件写保护功能，应将 WP# 引脚上拉至 VCC。
+</Info>
+
+## UPC MCU 存储空间映射
+
+UPC 系列 MCU 采用 ARM Cortex-M0+ 架构，遵循 ARM 统一内存映射规范，所有地址空间均为 32 位线性映射，大小为 4 GB。以下为 UPC03 主要存储区域划分：
+
+| 区域名称 | 起始地址 | 结束地址 | 大小 | 说明 |
+|----------|----------|----------|------|------|
+| FLASH（eReRAM） | `0x08000000` | `0x0800FFFF` | 64 KB | 程序存储器，支持 XIP 执行 |
+| SRAM | `0x20000000` | `0x20003FFF` | 16 KB | 数据存储器，单周期访问 |
+| 外设寄存器 | `0x40000000` | `0x5FFFFFFF` | 512 MB | APB/AHB 外设映射区 |
+| 系统控制 | `0xE0000000` | `0xE00FFFFF` | 1 MB | NVIC、SysTick、CoreDebug |
+
+<Note>
+  UPC MCU 的 FLASH 区域采用 eReRAM 技术，支持就地执行（XIP，Execute-In-Place），无需将代码复制到 SRAM 即可直接运行，可有效节省宝贵的 SRAM 空间。eReRAM 同时支持字节粒度读写，免擦除写入的特性也简化了固件在线升级（OTA）的实现。
+</Note>
+
+### 外设基地址速查
+
+| 外设 | 基地址 | 总线 |
+|------|--------|------|
+| GPIOA | `0x48000000` | AHB2 |
+| GPIOB | `0x48000400` | AHB2 |
+| GPIOC | `0x48000800` | AHB2 |
+| SPI1 | `0x40013000` | APB2 |
+| USART1 | `0x40013800` | APB2 |
+| USART2 | `0x40004400` | APB1 |
+| I2C1 | `0x40005400` | APB1 |
+| TIM1 | `0x40012C00` | APB2 |
+| ADC1 | `0x40012400` | APB2 |
+| RCC | `0x40021000` | AHB1 |
+
+### 链接脚本存储器配置示例
+
+```text
+/* UPC03 链接脚本片段（GCC ld 格式） */
+MEMORY
+{
+  FLASH (rx)  : ORIGIN = 0x08000000, LENGTH = 64K
+  SRAM  (rwx) : ORIGIN = 0x20000000, LENGTH = 16K
+}
+
+SECTIONS
+{
+  .text   : { *(.text*)   } > FLASH
+  .rodata : { *(.rodata*) } > FLASH
+  .data   : { *(.data*)   } > SRAM AT > FLASH
+  .bss    : { *(.bss*)    } > SRAM
+  ._stack : { . = ALIGN(8); . += 2K; } > SRAM
+}
+```
+
+<Tip>
+  在资源受限的 16 KB SRAM 环境中，建议将栈大小限制在 1–2 KB，并使用静态分配（`static` 变量）代替堆动态分配（`malloc`），以降低碎片化风险。可通过 `arm-none-eabi-size` 工具检查 `.text`、`.data`、`.bss` 各段的实际占用，确保链接后镜像不超出 Flash 与 SRAM 边界。
+</Tip>

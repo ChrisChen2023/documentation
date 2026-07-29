@@ -1,0 +1,240 @@
+---
+title: "ATOM 模型转换：ONNX/TFLite 到 ATOM 格式"
+sidebarTitle: "模型转换"
+description: "使用 atom-compiler 将 ONNX、TFLite 或 PyTorch 模型转换为 ATOM 推理格式，支持 INT8/INT4 量化，涵盖 CLI 与 Python API 完整用法。"
+---
+
+ATOM 存算一体芯片使用专有的 `.atom` 模型格式，该格式由 `atom-compiler` 工具从标准 AI 框架的导出格式（ONNX、TFLite）转换而来。转换过程包含计算图优化、算子融合、CIM 阵列映射及权重量化编码等步骤，将浮点模型映射至 ATOM-01 片上 eReRAM 阵列的物理存储布局，确保推理时权重无需动态加载。本文介绍从各主流框架导出到 ATOM 格式部署的完整转换流程，包含 CLI 与 Python API 两种使用方式及常见问题排查。
+
+## 支持的源格式
+
+| 源格式 | 推荐程度 | 说明 |
+|---|---|---|
+| **ONNX**（opset 11–17） | ⭐ 首选 | 兼容性最佳，支持全部算子映射 |
+| **TFLite**（FlatBuffer） | ✅ 支持 | 支持 TFLite 量化模型（int8 tflite） |
+| **PyTorch**（.pt / .pth） | 🔄 需先导出 | 需先通过 `torch.onnx.export` 转换为 ONNX |
+| **TensorFlow SavedModel** | 🔄 需先导出 | 需先通过 `tf2onnx` 转换为 ONNX |
+
+<Tip>
+  PyTorch 用户推荐使用 `torch.onnx.export(model, dummy_input, "model.onnx", opset_version=17)` 导出，可最大化算子兼容性。导出前请确保模型已切换至 `eval()` 模式，并对动态轴进行正确声明。
+</Tip>
+
+## 模型要求
+
+在进行模型转换前，请确认模型满足以下约束条件：
+
+| 约束项 | 要求 | 说明 |
+|---|---|---|
+| **量化精度** | INT8 或 INT4 | 不支持全精度 FP32 模型直接部署 |
+| **最大参数量** | ≤ 50M（ATOM-01） | 受 8MB eReRAM 存储容量限制 |
+| **输入数据格式** | NCHW | 通道优先格式 |
+| **支持算子集** | 见下表 | 不支持算子可降级至 CPU 执行 |
+| **动态 shape** | 不支持 | 输入尺寸须在编译期固定 |
+
+<Note>
+  模型参数量上限为 50M 参数（INT8，约等于 50MB 参数数据），受片上 eReRAM 8MB 可用容量限制（INT4 量化下可支持最大约 100M 参数）。超出容量的模型需进行通道剪枝、知识蒸馏或分块部署。运行 `atom-compiler analyze` 可在转换前预估存储占用。
+</Note>
+
+### 已支持的核心算子
+
+| 算子类别 | 支持列表 |
+|---|---|
+| 卷积 | Conv2D, DepthwiseConv2D, ConvTranspose2D, Conv1D |
+| 线性 | MatMul, Linear (Gemm) |
+| 激活 | ReLU, ReLU6, Sigmoid, Tanh, HardSwish, GELU（近似） |
+| 归一化 | BatchNorm（融合至权重）, LayerNorm |
+| 池化 | MaxPool2D, AvgPool2D, GlobalAvgPool |
+| 循环 | GRU, LSTM（单层，单向） |
+| 注意力 | MultiHeadAttention（序列长度 ≤ 256） |
+| 重塑 | Reshape, Transpose, Concat, Split, Slice |
+
+## atom-compiler CLI 用法
+
+`atom-compiler` 是 ATOM SDK 提供的命令行转换工具，适合脚本化批量转换与 CI/CD 集成。
+
+### 基本 INT8 转换
+
+```bash
+atom-compiler convert \
+    --input  model.onnx \
+    --output model.atom \
+    --precision int8
+```
+
+转换过程输出示例：
+
+```
+[atom-compiler] Version: 1.2.0
+[atom-compiler] Loading ONNX model: model.onnx
+[atom-compiler] Input shape: [1, 3, 224, 224]  dtype: float32
+[atom-compiler] Graph optimization:
+    fold_constants      ... done (12 nodes removed)
+    fuse_bn_into_conv   ... done (18 BatchNorm fused)
+    fuse_relu           ... done (15 ReLU fused)
+    eliminate_identity  ... done
+[atom-compiler] Layer analysis: 52 layers, 11.7M params
+[atom-compiler] CIM array mapping:
+    Assigned to CIM: 48 layers (92.3% compute)
+    Fallback to CPU: 4 layers (Reshape, GlobalAvgPool ×2, Softmax)
+[atom-compiler] eReRAM usage: 5.8MB / 8MB (72.5%)
+[atom-compiler] Compilation successful → model.atom (6.1MB)
+[atom-compiler] Elapsed: 8.3s
+```
+
+### INT4 转换（需校准数据集）
+
+INT4 量化可将模型体积减半，进一步提升能效。由于量化误差较大，**必须**提供校准数据集以统计激活值分布：
+
+```bash
+atom-compiler convert \
+    --input      model.onnx \
+    --output     model_int4.atom \
+    --precision  int4 \
+    --calib-data calib/
+```
+
+`calib/` 目录应包含 100–1000 张代表性输入图片（支持 `.jpg`、`.png`、`.npy`）。校准过程约耗时 30–120 秒，具体取决于模型大小与校准集数量。
+
+### 分析模型层信息与存储占用
+
+```bash
+atom-compiler analyze model.atom
+```
+
+```
+============================================================
+ ATOM Model Analysis: model.atom
+============================================================
+Model:        resnet18-int8
+Input:        [1, 3, 224, 224]  float32
+Output:       [1, 1000]         float32
+Precision:    INT8
+Total Params: 11.7M
+------------------------------------------------------------
+Layer #  Name             Type        Shape Out       CIM?  eReRAM(KB)
+  0      conv1            Conv2D      1,64,112,112    Yes       9.2
+  1      bn1+relu         (fused)     —               —         —
+  2      layer1.0.conv1   Conv2D      1,64,56,56      Yes      36.0
+  ...
+ 49      fc               Linear      1,1000          Yes     125.0
+------------------------------------------------------------
+CIM Layers:  48  (eReRAM: 5810 KB)
+CPU Layers:  4   (Reshape, AvgPool, Softmax)
+Total eReRAM: 5810 KB / 8192 KB  (70.9%)
+SRAM Peak:    312 KB / 2048 KB   (15.2%)
+============================================================
+```
+
+### 软件仿真（无需硬件）
+
+在无 ATOM-EVB 的环境中，可使用软件仿真模式验证模型转换正确性：
+
+```bash
+atom-compiler simulate model.atom --input test.jpg
+```
+
+```
+[simulate] Loading model: model.atom
+[simulate] Input: test.jpg → [1,3,224,224] preprocessed
+[simulate] Running software simulation (no hardware required)...
+[simulate] Output: [1, 1000]
+[simulate] Top-1: tabby_cat     (0.9423)
+[simulate] Top-2: tiger_cat     (0.0318)
+[simulate] Top-3: Egyptian_cat  (0.0089)
+[simulate] Simulation complete in 1240ms
+[simulate] Note: latency reflects software simulation, not hardware performance
+```
+
+## Python API 用法
+
+Python API 适合在训练-转换-部署一体化 Python 工作流中使用，支持更细粒度的编译参数控制。
+
+```python
+from atom_sdk import Compiler
+
+# 初始化编译器实例
+c = Compiler()
+
+# 加载 ONNX 模型
+c.load('model.onnx')
+
+# 设置量化精度
+c.set_precision('int8')   # 'int8' 或 'int4'
+
+# 设置校准数据集路径（INT4 必须；INT8 可选但推荐）
+c.set_calib_data('calib/')
+
+# 设置输入形状（若 ONNX 中含动态轴，必须在此固定）
+c.set_input_shape([1, 3, 224, 224])
+
+# 执行编译
+model = c.compile()
+
+# 保存 ATOM 模型文件
+model.save('model.atom')
+
+# 查看编译统计信息
+info = model.get_info()
+print(f"eReRAM 占用: {info['ereeram_kb']} KB / 8192 KB")
+print(f"CIM 层数: {info['cim_layers']}")
+print(f"CPU 回退层数: {info['cpu_fallback_layers']}")
+```
+
+### 高级编译选项
+
+```python
+from atom_sdk import Compiler, CompileConfig
+
+config = CompileConfig(
+    precision='int4',
+    calib_data='calib/',
+    calib_method='percentile',     # 'minmax' | 'percentile' | 'kl_divergence'
+    calib_percentile=99.99,        # percentile 方法的分位数
+    input_shape=[1, 3, 224, 224],
+    output_layout='NCHW',
+    enable_layer_fusion=True,      # 启用 BN/ReLU 融合
+    enable_weight_compress=True,   # 启用权重压缩（减少 eReRAM 占用）
+    fallback_to_cpu=True,          # 不支持算子自动降级至 CPU
+    verbose=True,                  # 打印详细编译日志
+)
+
+c = Compiler(config=config)
+c.load('model.onnx')
+model = c.compile()
+model.save('model_int4.atom')
+```
+
+## 校准数据集要求
+
+量化校准数据集是影响 INT4（以及 INT8 后量化）精度的关键因素，请遵循以下准则：
+
+<CardGroup cols={2}>
+  <Card title="数量要求" icon="database">
+    **推荐 200–500 张**，最少 100 张，最多 1000 张。过少导致统计不准确，过多不会进一步提升精度但会增加编译时间。
+  </Card>
+  <Card title="代表性要求" icon="chart-pie">
+    校准集应覆盖推理时可能出现的**典型输入分布**，包含亮度、遮挡、角度等多样性，不应使用全黑/全白等极端样本。
+  </Card>
+  <Card title="格式要求" icon="file-image">
+    支持 `.jpg`、`.png`（图像任务）或 `.npy`（传感器数据）。图像将自动缩放至模型输入尺寸并按训练时相同的均值/方差归一化。
+  </Card>
+  <Card title="归一化配置" icon="sliders">
+    若需自定义预处理参数，在 `CompileConfig` 中设置 `calib_mean=[0.485,0.456,0.406]` 与 `calib_std=[0.229,0.224,0.225]`（ImageNet 标准值）。
+  </Card>
+</CardGroup>
+
+## 常见转换错误与解决方案
+
+| 错误信息 | 原因 | 解决方案 |
+|---|---|---|
+| `UnsupportedOp: DynamicQuantizeLinear` | ONNX opset 不兼容 | 重新导出模型，指定 `opset_version=17` |
+| `ShapeInferenceError: dynamic axis` | 输入含动态 shape | 添加 `--input-shape 1,3,224,224` 参数固定形状 |
+| `eReRAM overflow: 8.4MB > 8MB` | 模型参数超出片上容量 | 改用 INT4 量化或对模型进行通道剪枝 |
+| `CalibDataError: less than 100 samples` | 校准集样本不足 | 补充校准数据至 100 张以上 |
+| `ONNX import failed: IR version 10` | ONNX 版本过新 | 升级 `atom-compiler` 至最新版本 |
+| `LayerMapError: LSTM bidirectional` | 不支持双向 LSTM | 改为单向 LSTM，或手动拆分后重组 |
+| `Conv2D kernel size > 7x7` | 大卷积核不支持 CIM 映射 | 使用 `--fallback-to-cpu` 允许该层 CPU 回退 |
+
+<Warning>
+  使用 `--fallback-to-cpu` 将使部分层在主机 MCU 上执行而非 CIM 阵列，会显著降低推理速度和能效。建议优先通过模型结构调整消除不支持算子，仅在原型阶段临时使用 CPU 回退。
+</Warning>

@@ -1,0 +1,250 @@
+---
+title: "ATOM-EVB 评估板快速上手：10 分钟完成首次推理"
+sidebarTitle: "快速上手"
+description: "按步骤完成 ATOM-EVB 上电、镜像烧录与串口连接，运行内置 ResNet18 推理 Demo，验证 ATOM 存算一体方案的完整工作流程。"
+---
+
+本指南帮助工程师在 10 分钟内完成 ATOM-EVB 评估板的硬件连接、系统镜像烧录与首次 AI 推理验证。整个流程无需编写任何代码，仅通过预置的 `atom-demo` 与 `atom-cli` 命令行工具即可完整体验 ATOM 存算一体推理方案的延迟与能效表现。完成本指南后，建议继续阅读 [SDK 安装](/atom/sdk-setup) 章节以搭建完整的模型开发与部署环境。
+
+<Warning>
+  首次上电后，系统将自动扩展文件系统至 eMMC 全部可用空间，此过程约需 **2~3 分钟**，期间串口会暂停输出且状态 LED 持续闪烁。**请勿在此期间断电**，否则可能导致文件系统损坏，需重新烧录镜像。
+</Warning>
+
+<Steps>
+
+  ### 开箱清单确认
+
+  取出 ATOM-EVB 包装，确认以下物品齐全：
+
+  | 物品 | 数量 | 备注 |
+  |---|---|---|
+  | ATOM-EVB 评估板 | 1 | 已贴 ATOM-01 SoC |
+  | USB-C 数据/供电线 | 1 | 5V/3A，长 1.5m |
+  | Micro USB 调试线 | 1 | 串口调试用 |
+  | 散热片 | 1 | 已预贴导热双面胶，覆盖 ATOM-01 |
+  | OV5647 摄像头模块 | 1 | 仅限摄像头套装版本 |
+  | 快速入门卡 | 1 | 含技术支持联系信息 |
+
+  <Note>
+    若采购的是标准版（不含摄像头），后续步骤中可用本地图片文件（`--input image.jpg`）替代摄像头输入（`--input /dev/video0`）进行 Demo 演示。
+  </Note>
+
+  确认无误后，将散热片粘贴至 ATOM-01 芯片表面（若尚未安装），并将摄像头模块的 FPC 排线插入 MIPI CSI-2 接口（注意金手指朝向板内）。
+
+  ### 烧录系统镜像
+
+  从昕原半导体技术支持门户（[support.xinyuan-semi.com](https://support.xinyuan-semi.com)，注册后可访问）下载最新 ATOM-EVB 系统镜像：
+
+  ```
+  atom-evb-linux-v1.2.0-20240601.img.xz  (约 1.8GB 压缩包)
+  ```
+
+  **Linux / macOS 烧录方法（推荐）：**
+
+  将 ATOM-EVB 的 eMMC 通过 USB-C 线以 UMS（USB Mass Storage）模式挂载到主机，然后执行：
+
+  ```bash
+  # 解压镜像
+  xz -dk atom-evb-linux-v1.2.0-20240601.img.xz
+
+  # 确认 EVB 对应的设备节点（谨慎核对！）
+  lsblk
+
+  # 烧录（将 /dev/sdX 替换为实际设备节点，如 /dev/sdb）
+  sudo dd if=atom-evb-linux-v1.2.0-20240601.img \
+      of=/dev/sdX \
+      bs=4M \
+      status=progress \
+      conv=fsync
+  ```
+
+  **Windows 烧录方法：**
+
+  使用随附的 `AtomFlasher.exe` 图形化烧录工具（位于技术支持门户 Tools 目录），选择镜像文件后点击 **Flash** 即可。
+
+  <Tip>
+    如需进入 UMS 烧录模式：按住板上 **BOOT** 按键，同时插入 USB-C 线，待主机识别到新 USB 存储设备后松开按键。
+  </Tip>
+
+  烧录完成后，弹出设备，重新上电进入正常启动流程。
+
+  ### 上电与串口连接
+
+  1. 将 Micro USB 调试线连接至 ATOM-EVB 的 **UART DEBUG** 口与主机。
+  2. 用 USB-C 线连接 ATOM-EVB 供电口至 5V/3A 适配器或主机 USB-C 口。
+  3. 在主机上打开串口终端工具（如 `minicom`、`screen` 或 PuTTY），配置参数如下：
+
+  | 参数 | 值 |
+  |---|---|
+  | 波特率 | 115200 |
+  | 数据位 | 8 |
+  | 停止位 | 1 |
+  | 校验 | 无 |
+  | 流控 | 无 |
+
+  ```bash
+  # Linux / macOS 示例（将 /dev/ttyUSB0 替换为实际端口）
+  screen /dev/ttyUSB0 115200
+  ```
+
+  上电后，串口将输出 U-Boot 及 Linux 内核启动日志。首次启动因文件系统扩展，启动过程约需 **2~3 分钟**，请耐心等待出现登录提示符：
+
+  ```
+  atom-evb login: _
+  ```
+
+  使用以下凭据登录：
+
+  | 用户名 | 密码 |
+  |---|---|
+  | `root` | `atom2024` |
+
+  ### 验证 ATOM-01 识别
+
+  登录后，运行 `atom-info` 命令确认系统已正确识别 ATOM-01 芯片及其驱动状态：
+
+  ```bash
+  atom-info
+  ```
+
+  正常输出示例：
+
+  ```
+  ============================================
+   ATOM AI Accelerator Information
+  ============================================
+  Device Node   : /dev/atom0
+  Chip ID       : ATOM-01  Rev B
+  Firmware Ver  : 1.2.0-release
+  CIM Arrays    : 16 x (256x256)  [OK]
+  On-chip SRAM  : 2048 KB         [OK]
+  On-chip eReRAM: 8192 KB         [OK]
+  Peak Perf.    : 8 TOPS (INT8) / 16 TOPS (INT4)
+  PCIe Link     : Gen3 x4         [UP]
+  Driver Status : atom_drv 1.2.0  [LOADED]
+  Runtime Ver   : atomrt 1.2.0
+  ============================================
+  Board         : ATOM-EVB v1.1
+  MCU           : UPC03  fw-0.9.2
+  DRAM          : 1024 MB LPDDR4
+  eMMC          : 14.6 GB available
+  Kernel        : Linux 5.15.92-atom #1
+  ============================================
+  ```
+
+  <Note>
+    若 `CIM Arrays` 行显示 `[ERROR]` 或 Driver Status 为 `[NOT LOADED]`，请检查 ATOM-01 散热片是否正确安装，并重新烧录最新系统镜像。如问题持续，请联系昕原技术支持并提供 `dmesg | grep atom` 的完整输出。
+  </Note>
+
+  ### 运行内置推理 Demo
+
+  ATOM-EVB 系统镜像预置了多个推理 Demo 模型。使用 `atom-demo` 命令运行 ResNet-18 INT8 图像分类推理：
+
+  **接摄像头实时推理（摄像头套装版本）：**
+
+  ```bash
+  atom-demo --model resnet18-int8 --input /dev/video0
+  ```
+
+  **使用内置测试图片（通用版本）：**
+
+  ```bash
+  atom-demo --model resnet18-int8 --input /usr/share/atom-demo/test_images/cat.jpg
+  ```
+
+  Demo 启动后将持续输出推理结果，示例输出：
+
+  ```
+  [ATOM Demo] Loading model: resnet18-int8 ...
+  [ATOM Demo] Model loaded in 210ms (eReRAM programming complete)
+  [ATOM Demo] Input source: /dev/video0 (640x480 @ 30fps)
+  [ATOM Demo] Starting inference loop. Press Ctrl+C to stop.
+
+  ─────────────────────────────────────────────────
+  Frame #0001 │ Top-1: tabby_cat (96.3%)
+              │ Top-2: tiger_cat (2.8%)
+              │ Top-3: Egyptian_cat (0.7%)
+              │ Latency: 2.1ms  │ FPS: 476
+  ─────────────────────────────────────────────────
+  Frame #0002 │ Top-1: tabby_cat (95.1%)
+              │ Top-2: tiger_cat (3.5%)
+              │ Top-3: Egyptian_cat (1.1%)
+              │ Latency: 2.1ms  │ FPS: 476
+  ─────────────────────────────────────────────────
+  ```
+
+  按 `Ctrl+C` 停止后，Demo 将打印汇总性能统计。
+
+  查看所有内置 Demo 模型列表：
+
+  ```bash
+  atom-demo --list
+  ```
+
+  输出示例：
+
+  ```
+  Available built-in models:
+    resnet18-int8        Image Classification  (ImageNet 1000-class)
+    mobilenetv2-int8     Image Classification  (ImageNet 1000-class)
+    mobilenetv2-int4     Image Classification  (ImageNet 1000-class)
+    yolov5s-int8         Object Detection      (COCO 80-class)
+    efficientnet-b0-int8 Image Classification  (ImageNet 1000-class)
+    ds-cnn-int4          Keyword Spotting      (Google Speech Commands)
+    anomaly-mlp-int8     Anomaly Detection     (MVTec AD)
+  ```
+
+  ### 查看推理结果与性能统计
+
+  按 `Ctrl+C` 终止 Demo 后，终端将打印完整性能统计报告：
+
+  ```
+  ============================================================
+   ATOM Demo Performance Summary — resnet18-int8
+  ============================================================
+  Total Frames      : 1000
+  Total Time        : 2.134 s
+  Avg Latency       : 2.13 ms / frame
+  Min Latency       : 2.09 ms
+  Max Latency       : 2.41 ms
+  P99 Latency       : 2.38 ms
+  Avg Throughput    : 468.7 FPS
+  Avg Power         : 512 mW
+  Energy/Inference  : 1090 μJ
+  Top-1 Accuracy    : 69.8% (ImageNet-val 50k)
+  ============================================================
+  Device: ATOM-01 Rev B | Precision: INT8 | Batch: 1
+  ============================================================
+  ```
+
+  使用 `atom-cli` 工具可进行更细粒度的设备管理与诊断：
+
+  ```bash
+  # 查看实时功耗与温度
+  atom-cli status --watch
+
+  # 清除已编程模型（释放 eReRAM）
+  atom-cli model --clear
+
+  # 运行硬件自检
+  atom-cli selftest --full
+  ```
+
+  <Tip>
+    `atom-cli` 是 ATOM 设备管理的核心工具，支持模型管理、实时监控、日志导出等功能。运行 `atom-cli --help` 查看完整命令列表，或参阅 [SDK 安装](/atom/sdk-setup) 章节了解更多用法。
+  </Tip>
+
+</Steps>
+
+## 下一步
+
+完成首次推理验证后，建议按以下路径深入探索 ATOM 方案：
+
+<CardGroup cols={2}>
+  <Card title="安装 SDK 开发环境" icon="wrench" href="/atom/sdk-setup">
+    在主机 Ubuntu 上安装完整 SDK，开始模型编译与自定义部署开发
+  </Card>
+  <Card title="转换自己的模型" icon="arrows-rotate" href="/atom/model-conversion">
+    将 ONNX/PyTorch/TFLite 模型转换为 ATOM 格式并部署到 EVB
+  </Card>
+</CardGroup>

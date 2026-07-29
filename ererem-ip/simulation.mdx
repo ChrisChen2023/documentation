@@ -1,0 +1,358 @@
+---
+title: "eReRAM IP 功能仿真环境搭建与使用指南"
+sidebarTitle: "仿真验证"
+description: "使用昕原提供的 Verilog 功能模型和标准 Testbench，在 VCS、Xcelium 或 ModelSim 中完成 eReRAM IP 的读写功能验证与系统级集成仿真。"
+---
+
+昕原半导体为每款 eReRAM IP 提供完整的仿真支持套件，涵盖 RTL 功能验证所需的 Verilog 行为模型、用于模拟特性表征的 SPICE 模型，以及可开箱即用的标准 Testbench 工程。工程师可在主流仿真平台上快速搭建仿真环境，验证读写逻辑正确性，并将 IP 无缝集成到 SoC 级验证框架中，显著缩短设计迭代周期。
+
+## 仿真模型概述
+
+昕原 eReRAM IP 交付包中提供两类仿真模型，满足不同阶段的验证需求：
+
+| 模型类型 | 文件名 | 用途 |
+|---|---|---|
+| Verilog 功能模型 | `sim_model.v` | RTL 级功能仿真，验证读写控制逻辑 |
+| SPICE 模型 | `ererem_cell.spi` | 模拟特性表征、编程电流及时序分析 |
+
+- **Verilog 功能模型**：精确描述 eReRAM 的读、写、擦除状态机行为，忽略模拟时序细节，适合在数字仿真环境中快速验证控制器逻辑与接口协议。
+- **SPICE 模型**：由昕原工艺团队提取，反映器件的电阻分布、编程电压-电流特性及保持特性，供模拟/混合信号仿真使用，不用于数字逻辑验证。
+
+<Note>
+SPICE 模型需与对应工艺节点的 PDK 配合使用，使用前请联系昕原 FAE 获取授权版本。
+</Note>
+
+## 支持的仿真器
+
+eReRAM 功能模型兼容以下主流数字仿真平台：
+
+| 仿真器 | 供应商 | 推荐版本 |
+|---|---|---|
+| VCS | Synopsys | 2021.09 及以上 |
+| Xcelium | Cadence | 23.03 及以上 |
+| ModelSim / Questasim | Siemens EDA | 2021.3 及以上 |
+
+<Note>
+功能模型使用 IEEE 1364-2001 标准 Verilog 语法，理论上兼容任何支持该标准的数字仿真器。如遇兼容性问题，请提交技术支持工单。
+</Note>
+
+## 仿真套件目录结构
+
+IP 交付包解压后，`simulation/` 目录结构如下：
+
+```
+<ip_name>_v<version>/
+├── doc/
+│   └── sim_userguide.pdf          # 仿真使用手册
+├── simulation/
+│   ├── model/
+│   │   ├── sim_model.v             # Verilog 功能模型（顶层）
+│   │   ├── ererem_ctrl.v           # 内部控制器模型
+│   │   └── ererem_cell.spi         # SPICE 单元模型
+│   ├── tb/
+│   │   ├── tb_top.v                # 标准 Testbench 顶层
+│   │   ├── tb_wr_rd.v              # 写-读功能场景
+│   │   ├── tb_por.v                # 上电复位场景
+│   │   └── tb_endurance.v          # 耐久性压力测试场景
+│   ├── scripts/
+│   │   ├── run_vcs.tcl             # VCS 运行脚本
+│   │   ├── run_xcelium.tcl         # Xcelium 运行脚本
+│   │   └── run_modelsim.do         # ModelSim/Questasim DO 脚本
+│   └── filelist/
+│       ├── rtl.f                   # 仿真文件列表
+│       └── define.vh               # 全局宏定义头文件
+├── netlist/
+│   └── ...                         # 门级网表（需单独授权）
+└── timing/
+    └── ...                         # 时序库文件
+```
+
+## 仿真环境搭建步骤
+
+<Steps>
+
+### 解压 IP 交付包并确认 simulation/ 目录结构
+
+将昕原提供的 IP 交付压缩包解压到工作目录，检查 `simulation/` 子目录是否完整：
+
+```bash
+tar -xzf ererem_ip_v2p1.tar.gz -C /proj/ererem_ip/
+cd /proj/ererem_ip/ererem_ip_v2p1/simulation/
+ls -lR model/ tb/ scripts/ filelist/
+```
+
+确认 `sim_model.v`、标准 Testbench 文件及运行脚本均存在。若目录缺失，请联系昕原交付团队重新打包。
+
+### 将 sim_model.v 添加到仿真文件列表
+
+打开 `filelist/rtl.f`，将 eReRAM 功能模型路径追加到文件列表末尾，或直接使用交付包中预配置的 `rtl.f`：
+
+```
+// filelist/rtl.f
+// ---- eReRAM 功能模型 ----
+${EREREM_ROOT}/simulation/model/sim_model.v
+${EREREM_ROOT}/simulation/model/ererem_ctrl.v
+// ---- 用户 SoC RTL（按实际路径填写）----
+${SOC_ROOT}/rtl/top.v
+${SOC_ROOT}/rtl/...
+```
+
+在终端设置环境变量：
+
+```bash
+export EREREM_ROOT=/proj/ererem_ip/ererem_ip_v2p1
+export SOC_ROOT=/proj/my_soc
+```
+
+### 设置 define 宏：EREREM_FUNC_SIM 启用功能仿真模式
+
+功能模型通过编译宏 `EREREM_FUNC_SIM` 在功能仿真与时序仿真之间切换。在运行仿真前，必须定义该宏以激活纯功能行为，跳过模拟时序约束：
+
+对于 VCS，在编译命令中添加：
+
+```bash
++define+EREREM_FUNC_SIM
+```
+
+或在 `filelist/define.vh` 中加入：
+
+```verilog
+`define EREREM_FUNC_SIM
+```
+
+<Warning>
+若未设置 `EREREM_FUNC_SIM`，模型将尝试加载时序参数文件，在纯功能仿真环境中可能导致编译错误或仿真挂起。
+</Warning>
+
+### 运行昕原提供的标准 Testbench 验证基本读写功能
+
+使用交付包中预配置的仿真脚本一键运行标准验证场景。
+
+**VCS：**
+
+```tcl
+# scripts/run_vcs.tcl
+vcs -full64 -sverilog \
+    +define+EREREM_FUNC_SIM \
+    -f ${EREREM_ROOT}/simulation/filelist/rtl.f \
+    -top tb_top \
+    -o simv \
+    -l compile.log
+
+./simv -l sim.log +dump_fsdb
+```
+
+**Xcelium：**
+
+```tcl
+# scripts/run_xcelium.tcl
+xrun -64bit \
+     +define+EREREM_FUNC_SIM \
+     -f ${EREREM_ROOT}/simulation/filelist/rtl.f \
+     -top tb_top \
+     -log xrun.log
+```
+
+**ModelSim / Questasim：**
+
+```
+# scripts/run_modelsim.do
+vlib work
+vmap work work
+vlog +define+EREREM_FUNC_SIM \
+     -f ${EREREM_ROOT}/simulation/filelist/rtl.f
+vsim -t 1ps work.tb_top
+run -all
+```
+
+仿真结束后，检查 log 文件中是否出现 `SIMULATION PASS` 标记。若出现 `FAIL` 或 `ERROR`，请对照仿真手册的错误码章节排查。
+
+### 集成到用户 SoC TB 中进行系统级验证
+
+将 eReRAM IP 实例化到用户 SoC Testbench 顶层，连接地址、数据、控制总线，并确保电源网络（VDD、VDDIO、VSS）和复位信号正确驱动。详细实例化方法参见下方代码示例。在系统级仿真中，建议通过 UVM 或 OVM 验证环境驱动 eReRAM 控制器，覆盖正常读写、边界地址及异常注入等场景。
+
+</Steps>
+
+## 关键仿真场景
+
+交付包中的标准 Testbench 覆盖以下三类核心验证场景：
+
+### 写后读（Write-Then-Read）
+
+顺序写入数据模式（全 `0x55`、全 `0xAA`、随机数据），随后逐地址读出并与期望值比对。这是验证 eReRAM 存储单元基本功能的必选场景。
+
+### 上电复位（Power-On Reset）
+
+模拟芯片上电序列：VDD 从 0 爬升至额定电压，复位信号 `RST_N` 保持低电平至少 20 个时钟周期，随后拉高。Testbench 验证 eReRAM 控制器在 POR 完成后能正确响应首条读指令，且内部状态机处于 IDLE 状态。
+
+### 耐久性压力序列（Endurance Stress Sequence）
+
+在缩减的周期数（默认 1000 次）内连续对同一地址执行擦除-写入循环，每轮结束后读取数据并校验。此场景用于在仿真层面验证 BIST 和控制器逻辑的一致性，不能替代实际器件的耐久性可靠性测试。
+
+## 仿真实例化代码示例
+
+以下代码展示如何在用户 Testbench 中实例化 eReRAM IP 并执行一次完整的写-读测试：
+
+```verilog
+// tb_user_soc.v
+// 昕原 eReRAM IP 仿真实例化示例
+// 请根据实际 IP 端口名称和参数进行调整
+
+`timescale 1ns/1ps
+`define EREREM_FUNC_SIM   // 功能仿真模式
+
+module tb_user_soc;
+
+  // ----------------------------------------------------------------
+  // 参数定义
+  // ----------------------------------------------------------------
+  parameter ADDR_WIDTH = 12;        // 地址位宽，对应 4K word 深度
+  parameter DATA_WIDTH = 32;        // 数据位宽
+
+  // ----------------------------------------------------------------
+  // 信号声明
+  // ----------------------------------------------------------------
+  reg                    clk;
+  reg                    rst_n;
+  reg                    ce_n;        // 片选（低有效）
+  reg                    we_n;        // 写使能（低有效）
+  reg                    oe_n;        // 输出使能（低有效）
+  reg  [ADDR_WIDTH-1:0]  addr;
+  reg  [DATA_WIDTH-1:0]  din;
+  wire [DATA_WIDTH-1:0]  dout;
+  reg                    vdd;         // 电源（仿真用 reg）
+  reg                    vpp;         // 编程电压
+
+  // ----------------------------------------------------------------
+  // eReRAM IP 实例化
+  // ----------------------------------------------------------------
+  ererem_ip #(
+    .ADDR_WIDTH (ADDR_WIDTH),
+    .DATA_WIDTH (DATA_WIDTH)
+  ) u_ererem (
+    .CLK    (clk),
+    .RST_N  (rst_n),
+    .CE_N   (ce_n),
+    .WE_N   (we_n),
+    .OE_N   (oe_n),
+    .ADDR   (addr),
+    .DIN    (din),
+    .DOUT   (dout),
+    .VDD    (vdd),
+    .VPP    (vpp)
+  );
+
+  // ----------------------------------------------------------------
+  // 时钟生成（50 MHz）
+  // ----------------------------------------------------------------
+  initial clk = 0;
+  always #10 clk = ~clk;   // 周期 20 ns
+
+  // ----------------------------------------------------------------
+  // 主测试序列
+  // ----------------------------------------------------------------
+  integer i;
+  reg [DATA_WIDTH-1:0] exp_data [0:15];  // 期望数据数组
+
+  initial begin
+    // 初始化信号
+    rst_n = 0;
+    ce_n  = 1;
+    we_n  = 1;
+    oe_n  = 1;
+    addr  = 0;
+    din   = 0;
+    vdd   = 1;
+    vpp   = 1;
+
+    // 上电复位：保持 RST_N 低至少 20 个周期
+    repeat(20) @(posedge clk);
+    rst_n = 1;
+    repeat(5)  @(posedge clk);
+
+    $display("[%0t] ===== 开始写入测试 =====", $time);
+
+    // ---- 写入 16 个地址 ----
+    for (i = 0; i < 16; i = i + 1) begin
+      exp_data[i] = $random;          // 生成随机数据
+      task_write(i[ADDR_WIDTH-1:0], exp_data[i]);
+    end
+
+    repeat(5) @(posedge clk);
+    $display("[%0t] ===== 开始读取验证 =====", $time);
+
+    // ---- 读出并比对 ----
+    for (i = 0; i < 16; i = i + 1) begin
+      task_read(i[ADDR_WIDTH-1:0]);
+      @(posedge clk); #1;
+      if (dout !== exp_data[i]) begin
+        $display("[FAIL] 地址 0x%0h: 期望 0x%0h, 实际 0x%0h",
+                  i, exp_data[i], dout);
+      end else begin
+        $display("[PASS] 地址 0x%0h: 数据 0x%0h 正确", i, dout);
+      end
+    end
+
+    repeat(10) @(posedge clk);
+    $display("[%0t] ===== 仿真结束 =====", $time);
+    $finish;
+  end
+
+  // ----------------------------------------------------------------
+  // 写操作 Task
+  // ----------------------------------------------------------------
+  task task_write;
+    input [ADDR_WIDTH-1:0] wr_addr;
+    input [DATA_WIDTH-1:0] wr_data;
+    begin
+      @(posedge clk); #1;
+      ce_n = 0;
+      we_n = 0;
+      oe_n = 1;
+      addr = wr_addr;
+      din  = wr_data;
+      @(posedge clk); #1;
+      ce_n = 1;
+      we_n = 1;
+    end
+  endtask
+
+  // ----------------------------------------------------------------
+  // 读操作 Task
+  // ----------------------------------------------------------------
+  task task_read;
+    input [ADDR_WIDTH-1:0] rd_addr;
+    begin
+      @(posedge clk); #1;
+      ce_n = 0;
+      we_n = 1;
+      oe_n = 0;
+      addr = rd_addr;
+      @(posedge clk); #1;
+      ce_n = 1;
+      oe_n = 1;
+    end
+  endtask
+
+  // ----------------------------------------------------------------
+  // 波形转储（可选，VCS/Xcelium）
+  // ----------------------------------------------------------------
+  initial begin
+    $fsdbDumpfile("tb_user_soc.fsdb");
+    $fsdbDumpvars(0, tb_user_soc);
+  end
+
+endmodule
+```
+
+## 时序说明与注意事项
+
+<Warning>
+Verilog 功能模型**忽略所有模拟时序参数**，包括编程脉冲宽度、读取延迟及建立/保持时间。功能仿真仅用于验证控制逻辑的正确性，**不得**作为时序签核（Sign-off）的依据。
+
+若需进行时序仿真，请使用交付包中的门级网表配合 `.sdf` 时序标注文件，在 VCS 或 Xcelium 中启用反标（Back-Annotation）模式运行。
+</Warning>
+
+<Note>
+时序仿真所需的门级网表和 `.sdf` 文件通常在设计套件交付时单独授权提供。如需获取，请联系昕原销售或 FAE。
+</Note>

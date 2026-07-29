@@ -1,0 +1,295 @@
+---
+title: "eReRAM IP SoC 集成流程与布局布线指南"
+sidebarTitle: "集成流程"
+description: "从 IP 交付包获取到布局规划、综合约束、布线规则及时序签核，完整介绍 eReRAM IP 嵌入 SoC 设计的每个关键步骤。"
+---
+
+将昕原半导体 eReRAM IP 嵌入 SoC 设计是一项涉及数字综合、物理实现与模拟电源管理的跨领域任务。本文按照典型数字后端流程顺序，逐步说明从获取 IP 交付包到最终时序签核的完整集成路径，帮助 SoC 集成工程师在首次流片前规避常见风险点，确保 eReRAM 宏单元在目标工艺节点上可靠运行。
+
+## 集成步骤
+
+<Steps>
+  <Step title="获取 IP 交付包">
+    向昕原半导体提交流片申请后，技术支持团队将提供完整的 IP 交付包（Delivery Package）。交付包包含以下文件：
+
+    | 文件类型 | 文件名示例 | 用途 |
+    |---|---|---|
+    | GDSII | `xys_ereram_1m_x32.gds` | 版图数据，用于 LVS/DRC 及最终 tapeout 合并 |
+    | LEF | `xys_ereram_1m_x32.lef` | 抽象视图，用于布局布线工具放置与布线 |
+    | Timing Lib | `xys_ereram_1m_x32_tt_1v8_25c.lib` | 标准单元时序库，包含 SS/TT/FF 三个 PVT 角 |
+    | Verilog Netlist | `xys_ereram_1m_x32.v` | 功能仿真黑盒模型，供 RTL/Gate-level 仿真使用 |
+    | Datasheet | `xys_ereram_1m_x32_ds_v1.2.pdf` | 完整电气参数与操作规范 |
+    | Testbench | `xys_ereram_tb/` | 功能验证测试向量与参考仿真脚本 |
+
+    请在收到交付包后核对文件 MD5 校验值，并在公司 IP 管理系统中完成登记，确保版本可追溯。
+
+    <Note>
+      若项目需要 AHB 接口版本或非标准容量配置，请在申请时注明，昕原技术支持将在正式交付前完成参数化定制。
+    </Note>
+  </Step>
+
+  <Step title="配置参数">
+    在正式将 IP 加入设计数据库前，需通过昕原提供的配置脚本 `xys_ereram_config.tcl` 对 IP 进行参数化实例化，主要可选参数如下：
+
+    - **容量（Capacity）**：支持 256Kb、512Kb、1Mb、2Mb 四档，通过参数 `MEM_DEPTH` 指定。
+    - **位宽（Data Width）**：支持 ×8、×16、×32 位宽，通过参数 `DATA_WIDTH` 指定。
+    - **接口类型（Interface）**：支持 AMBA APB（默认）或 AHB，通过参数 `BUS_TYPE` 设置为 `"APB"` 或 `"AHB"`。
+
+    ```bash
+    # 示例：配置 1Mb 容量、32 位位宽、APB 接口
+    xys_ereram_config.tcl \
+      --capacity 1M \
+      --width 32 \
+      --interface APB \
+      --output_dir ./ip_output/ereram_1m_x32
+    ```
+
+    配置完成后，脚本将自动生成对应的 `.lib`、`.lef`、`.v` 及 GDSII 文件至指定输出目录。
+
+    <Tip>
+      建议将配置脚本及所有输入参数纳入项目的版本控制系统（如 Git），以便在 ECO 阶段快速复现相同的 IP 配置。
+    </Tip>
+  </Step>
+
+  <Step title="综合集成">
+    将配置好的 eReRAM IP 加入综合（Synthesis）流程时，需按照以下步骤操作：
+
+    **1. 添加时序库文件**
+
+    在综合工具（如 Synopsys Design Compiler 或 Cadence Genus）的 `target_library` 与 `link_library` 中添加 eReRAM IP 提供的 `.lib` 文件：
+
+    ```tcl
+    # Synopsys DC 示例
+    set target_library [list \
+      stdcell_tt_1v8_25c.lib \
+      xys_ereram_1m_x32_tt_1v8_25c.lib \
+    ]
+    set link_library [concat * $target_library]
+    ```
+
+    **2. 设置 dont_touch 属性**
+
+    eReRAM 宏单元为硬 IP（Hard IP），综合工具不应对其内部结构进行优化或拆分。需在读入 netlist 后立即对该宏单元设置 `dont_touch`：
+
+    ```tcl
+    # 对 eReRAM 实例设置 dont_touch，防止综合工具优化内部逻辑
+    set_dont_touch [get_cells u_ereram_top]
+    set_dont_touch_network [get_pins u_ereram_top/PCLK]
+    ```
+
+    **3. 实例化方式**
+
+    在顶层 RTL 中以黑盒（Black Box）方式实例化 eReRAM IP，综合时引用 Verilog Netlist 作为功能描述：
+
+    ```verilog
+    // 顶层 RTL 中的 eReRAM 实例化示例
+    xys_ereram_1m_x32 u_ereram_top (
+      .PCLK     (pclk),
+      .PRESETn  (presetn),
+      .PSEL     (ereram_psel),
+      .PENABLE  (penable),
+      .PWRITE   (pwrite),
+      .PADDR    (paddr[11:0]),
+      .PWDATA   (pwdata[31:0]),
+      .PRDATA   (ereram_prdata),
+      .PREADY   (ereram_pready),
+      .PSLVERR  (ereram_pslverr)
+    );
+    ```
+
+    <Warning>
+      请勿将 eReRAM 的 `PCLK` 端口连接至经过综合 ICG（Integrated Clock Gating）单元的门控时钟，应直接连接到时钟树综合（CTS）后的全局时钟网络，以避免时序分析偏差。
+    </Warning>
+  </Step>
+
+  <Step title="布局规划（Floorplan）">
+    eReRAM IP 内部包含模拟倍压电路（Charge Pump），对电源噪声敏感，布局规划阶段须重点关注以下约束：
+
+    **放置位置要求**
+
+    - eReRAM 宏单元应放置在 **模拟供电域（Analog Power Domain）附近**，以缩短 VPP 倍压输出路径并减少电源噪声耦合。
+    - 宏单元四周需预留 **最小间距 50μm** 的隔离区，不得放置其他数字标准单元或宏单元，防止开关噪声对编程电压产生干扰。
+    - 推荐在 eReRAM 宏单元与数字逻辑区域之间插入一列空白 Filler Cell，进一步增强电气隔离。
+
+    **电源规划要求**
+
+    - VDD（1.8V 核心电源）与 VDDIO（3.3V IO 电源）需独立供电环（Power Ring），不与数字核心电源环共享。
+    - VPP 供电轨由宏单元内部倍压电路驱动，**禁止从芯片顶层 PAD 向 VPP 引脚外接电压**。
+
+    ```
+    # Innovus Floorplan TCL 示例：放置 eReRAM 宏单元
+    placeInstance u_ereram_top 120.0 80.0 R0
+    createPlacementBlockage \
+      -name ereram_keepout \
+      -box {70.0 30.0 270.0 230.0} \
+      -type hard
+    ```
+
+    <Warning>
+      若违反 50μm 最小间距规则，可能导致 eReRAM 在编程操作期间因电源噪声引起写失败（Write Disturb），该类失败在晶圆测试阶段较难复现，请务必严格遵守。
+    </Warning>
+  </Step>
+
+  <Step title="布线注意事项">
+    eReRAM IP 的布线阶段有别于纯数字宏单元，需对编程高压信号采取特殊处理措施：
+
+    **VPP 走线屏蔽要求**
+
+    编程电压 VPP 由内部倍压电路产生，电压幅度通常在 4.5V～6V 之间，若 VPP 相关走线与其他信号线产生耦合，可能诱发相邻存储单元的误编程（Disturb）。因此需满足以下布线规则：
+
+    - VPP 内部走线（位于宏单元内部 GDSII 层次内）已由昕原完成屏蔽处理，**集成工程师无需干预宏单元内部布线**。
+    - 顶层连接 VPP 的外部走线（如果需要测试点 PAD）应使用 **专用金属层**，并在两侧添加 GND 保护环（Guard Ring），最小侧向间距不小于 2μm（具体数值以工艺 DRM 为准）。
+    - 建议在 APR 工具中对 VPP 网络设置 `shield` 约束：
+
+    ```tcl
+    # Innovus 布线约束：对 VPP 网络添加屏蔽层
+    setNanoRouteMode -routeWithShielding true
+    addShielding \
+      -nets {VPP} \
+      -shieldNet VSS \
+      -minSpacing 2.0 \
+      -minWidth 0.5
+    ```
+
+    **其他布线注意事项**
+
+    - `PCLK` 时钟走线需满足工艺最大时钟网络延迟预算，建议在 CTS 约束文件中将其设置为 `ideal_network` 直至时钟树综合完成。
+    - 电源走线 VDD/VDDIO 需满足 IR-Drop 分析要求，目标压降不超过标称电压的 3%。
+
+    <Tip>
+      可在 Calibre DRC 规则文件中添加昕原提供的定制规则层（`xys_ereram_drc_addendum.rs`），以自动检查 VPP 走线间距及保护环完整性，该文件包含在 IP 交付包中。
+    </Tip>
+  </Step>
+
+  <Step title="时序签核">
+    eReRAM IP 的时序签核（Timing Sign-off）需在所有 PVT Corner 下均满足 Setup 与 Hold 时序要求，以确保在量产环境中稳定工作。
+
+    **PVT Corner 要求**
+
+    昕原提供以下三个 PVT 角的时序库，签核时需全部覆盖：
+
+    | Corner 名称 | 工艺角 | 电压 | 温度 | 用途 |
+    |---|---|---|---|---|
+    | WCS（最坏建立时序角） | SS | 1.62V | 125°C | Setup 时序检查 |
+    | WCH（最坏保持时序角） | FF | 1.98V | -40°C | Hold 时序检查 |
+    | TYP（典型角） | TT | 1.80V | 25°C | 功耗与特性分析 |
+
+    **MMMC 视图配置示例**
+
+    以下为 Cadence Tempus/Innovus MMMC 配置文件示例：
+
+    ```tcl
+    # mmmc_ereram.tcl —— MMMC 多角视图配置
+
+    # 定义时序库集合
+    create_library_set -name lib_ss_1v62_125c \
+      -timing [list \
+        stdcell_ss_1v62_125c.lib \
+        xys_ereram_1m_x32_ss_1v62_125c.lib \
+      ]
+
+    create_library_set -name lib_ff_1v98_m40c \
+      -timing [list \
+        stdcell_ff_1v98_m40c.lib \
+        xys_ereram_1m_x32_ff_1v98_m40c.lib \
+      ]
+
+    # 定义操作条件
+    create_op_cond -name op_ss_125c \
+      -library_file stdcell_ss_1v62_125c.lib \
+      -P 1 -V 1.62 -T 125
+
+    create_op_cond -name op_ff_m40c \
+      -library_file stdcell_ff_1v98_m40c.lib \
+      -P 1 -V 1.98 -T -40
+
+    # 定义约束模式
+    create_constraint_mode -name func_mode \
+      -sdc_files [list top_func.sdc ereram_constraints.sdc]
+
+    # 定义分析视图
+    create_analysis_view -name wcs_setup \
+      -constraint_mode func_mode \
+      -delay_corner [create_delay_corner \
+        -name dc_ss_125c \
+        -library_set lib_ss_1v62_125c \
+        -opcond op_ss_125c]
+
+    create_analysis_view -name wch_hold \
+      -constraint_mode func_mode \
+      -delay_corner [create_delay_corner \
+        -name dc_ff_m40c \
+        -library_set lib_ff_1v98_m40c \
+        -opcond op_ff_m40c]
+
+    # 激活视图：setup 用 WCS，hold 用 WCH
+    set_analysis_view \
+      -setup [list wcs_setup] \
+      -hold  [list wch_hold]
+    ```
+
+    <Note>
+      汽车级应用（AEC-Q100 Grade 1）需额外应用 OCV（On-Chip Variation）Derating 系数。详细说明请参阅《eReRAM IP 时序约束与 SDC 配置指南》。
+    </Note>
+  </Step>
+
+  <Step title="仿真验证">
+    集成完成后，需将昕原提供的 eReRAM Simulation Model 加入门级仿真（Gate-Level Simulation）流程，对读写功能进行完整验证。
+
+    **仿真模型说明**
+
+    交付包中提供两种仿真模型：
+
+    - **功能模型（Functional Model）**：`xys_ereram_1m_x32_func.v`，忽略时序信息，仅验证功能逻辑，适用于 RTL 功能仿真。
+    - **时序模型（Timing-Annotated Model）**：`xys_ereram_1m_x32_timing.v` + SDF 文件，包含门延迟与互联延迟信息，适用于 Gate-Level Simulation 及 STA 交叉验证。
+
+    **仿真启动示例**
+
+    ```bash
+    # 使用 Synopsys VCS 进行 Gate-Level 仿真（含 SDF 回标）
+    vcs \
+      -full64 \
+      -sverilog \
+      -timescale=1ns/1ps \
+      +neg_tchk \
+      -sdf_cmd_file ereram_sdf.cmd \
+      -v xys_ereram_1m_x32_timing.v \
+      -f filelist_top.f \
+      tb_soc_top.v \
+      -o simv_ereram_gls \
+      -l compile_ereram.log
+
+    ./simv_ereram_gls \
+      +define+SDF_ANNOTATE \
+      -l sim_ereram_gls.log
+    ```
+
+    **验证清单**
+
+    在提交流片前，请确认以下仿真场景均已通过：
+
+    - [ ] 上电复位序列（Power-On Reset）
+    - [ ] 顺序写入全 0 / 全 1 数据并回读校验
+    - [ ] 随机地址读写混合操作
+    - [ ] 编程后掉电再上电数据保持性验证
+    - [ ] APB 总线错误响应（`PSLVERR` 拉高场景）
+
+    <Tip>
+      昕原技术支持可提供标准功能验证测试向量（覆盖率报告参考值 ≥ 95%），如需获取，请联系 `ip-support@xinyuan-semi.com`。
+    </Tip>
+  </Step>
+</Steps>
+
+## NRE 定制流程与技术支持
+
+对于有特殊容量、非标准接口或专用工艺节点需求的客户，昕原半导体提供 **NRE（Non-Recurring Engineering）定制服务**。定制流程通常包括需求确认、技术可行性评估、设计定制与验证、交付物准备四个阶段，周期约为 8～16 周（视定制复杂度而定）。
+
+<Note>
+  如在集成过程中遇到任何技术问题，请通过以下渠道联系昕原半导体 IP 技术支持团队：
+
+  - **技术支持邮箱**：`ip-support@xinyuan-semi.com`
+  - **FAE 热线**：+86-21-XXXX-XXXX（工作日 09:00–18:00）
+  - **客户门户**：[https://iportal.xinyuan-semi.com](https://iportal.xinyuan-semi.com)（提交 Support Ticket，SLA 响应时间 ≤ 1 个工作日）
+
+  提交问题时请附上交付包版本号、工艺节点信息及复现步骤，以便技术团队快速定位问题。
+</Note>
