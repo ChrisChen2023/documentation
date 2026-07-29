@@ -1,7 +1,7 @@
 ---
-title: "URM 存储指令集与 UPC MCU 存储空间映射"
+title: "URM 系列 eReRAM 存储芯片 SPI 指令集详解与 UPC03 MCU 外设寄存器存储空间地址映射参考"
 sidebarTitle: "存储映射"
-description: "URM 芯片 SPI 指令集（含 opcode）、地址空间分配，以及 UPC MCU 完整存储映射表（Flash、SRAM、外设、系统区域），供固件开发参考。"
+description: "URM 系列存储芯片全部 SPI 指令（READ 0x03/WRITE 0x02/WREN 0x06/RDSR 0x05 等）、各型号地址格式说明，以及 UPC03 MCU 基于 ARM Cortex-M0+ 的 Flash、SRAM、APB/AHB 外设完整存储映射表与 GCC 链接脚本配置示例。"
 ---
 
 本节详细描述 URM 系列存储芯片的地址空间划分与 SPI 指令集，以及 UPC 系列 MCU 的完整存储映射架构。无论是开发 URM 的主机驱动程序，还是为 UPC MCU 编写裸机固件或移植 RTOS，理解底层地址布局和指令编码均是必要前提。固件开发者应结合链接脚本（linker script）与本节存储映射表共同使用。
@@ -102,14 +102,14 @@ void urm_write_byte(uint16_t addr, uint8_t data)
 
 通过 RDSR（`0x05`）指令可读取 8 位状态寄存器，各位含义如下：
 
-| 位 | 名称 | 访问 | 说明 |
-|----|------|------|------|
-| 0 | WIP | 只读 | Write In Progress，写操作进行中为 1，完成后自动清零 |
-| 1 | WEL | 只读 | Write Enable Latch，WREN 后为 1，写完或 WRDI 后为 0 |
-| 2 | BP0 | 读写 | Block Protect 位 0，与 BP1 组合决定写保护区域 |
-| 3 | BP1 | 读写 | Block Protect 位 1，具体保护范围见下表 |
-| 4–6 | — | — | 保留位，读出值不确定，写入应置 0 |
-| 7 | SRWD | 读写 | Status Register Write Disable，为 1 且 WP# 低电平时锁定状态寄存器 |
+| 位 | 名称 | 访问 | 复位值 | 说明 |
+|----|------|------|--------|------|
+| 0 | WIP | 只读 | 0 | Write In Progress，写操作进行中为 1，完成后自动清零 |
+| 1 | WEL | 只读 | 0 | Write Enable Latch，WREN 后为 1，写完或 WRDI 后为 0 |
+| 2 | BP0 | 读写 | 0 | Block Protect 位 0，与 BP1 组合决定写保护区域 |
+| 3 | BP1 | 读写 | 0 | Block Protect 位 1，具体保护范围见下表 |
+| 4–6 | — | — | 0 | 保留位，读出值不确定，写入应置 0 |
+| 7 | SRWD | 读写 | 0 | Status Register Write Disable，为 1 且 WP# 低电平时锁定状态寄存器 |
 
 **BP0/BP1 写保护范围（以 URM6401 为例）：**
 

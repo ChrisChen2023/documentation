@@ -1,5 +1,5 @@
 ---
-title: "eReRAM IP 时序约束与 SDC 配置指南"
+title: "eReRAM IP 时序约束 SDC 配置指南：MMMC 多角分析"
 sidebarTitle: "时序约束"
 description: "eReRAM IP 时序参数表与 SDC 约束示例，涵盖 create_clock、set_input_delay、MMMC 多角设置及汽车级应用 derating 配置说明。"
 ---
@@ -185,22 +185,22 @@ MMMC（Multi-Mode Multi-Corner）分析是确保 eReRAM IP 在全 PVT Corner 下
 create_library_set \
   -name lib_set_ss_1v62_125c \
   -timing [list \
-    /pdk/lib/stdcell_ss_1v62_125c.lib \
-    /ip/ereram/xys_ereram_1m_x32_ss_1v62_125c.lib \
+    stdcell_ss_1v62_125c.lib \
+    xys_ereram_1m_x32_ss_1v62_125c.lib \
   ]
 
 create_library_set \
   -name lib_set_tt_1v80_25c \
   -timing [list \
-    /pdk/lib/stdcell_tt_1v80_25c.lib \
-    /ip/ereram/xys_ereram_1m_x32_tt_1v80_25c.lib \
+    stdcell_tt_1v80_25c.lib \
+    xys_ereram_1m_x32_tt_1v80_25c.lib \
   ]
 
 create_library_set \
   -name lib_set_ff_1v98_m40c \
   -timing [list \
-    /pdk/lib/stdcell_ff_1v98_m40c.lib \
-    /ip/ereram/xys_ereram_1m_x32_ff_1v98_m40c.lib \
+    stdcell_ff_1v98_m40c.lib \
+    xys_ereram_1m_x32_ff_1v98_m40c.lib \
   ]
 
 # ----------------------------------------------------------
@@ -209,17 +209,17 @@ create_library_set \
 create_rc_corner \
   -name rc_worst \
   -temperature 125 \
-  -qrc_tech /pdk/qrc/worst.tch
+  -qrc_tech worst.tch
 
 create_rc_corner \
   -name rc_best \
   -temperature -40 \
-  -qrc_tech /pdk/qrc/best.tch
+  -qrc_tech best.tch
 
 create_rc_corner \
   -name rc_typical \
   -temperature 25 \
-  -qrc_tech /pdk/qrc/typical.tch
+  -qrc_tech typical.tch
 
 # ----------------------------------------------------------
 # Step 3：定义延迟角（Delay Corners）

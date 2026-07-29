@@ -1,7 +1,7 @@
 ---
 title: "URM 存储芯片 SPI 驱动与 UPC HAL 开发指南"
 sidebarTitle: "驱动开发"
-description: "昕原半导体提供 URM SPI 裸机 C 驱动和 UPC HAL 库，本文介绍驱动 API 接口、初始化方法、RTOS 多任务保护及深度掉电控制流程。"
+description: "昕原半导体 URM SPI 裸机 C 驱动与 UPC HAL 库：API 接口、初始化方法、RTOS 多任务保护及深度掉电控制流程。"
 ---
 
 昕原半导体为 URM 系列存储芯片和 UPC 系列 MCU 提供完整的软件驱动支持，包括面向裸机嵌入式环境的 URM SPI C 驱动、UPC 外设 HAL 抽象层，以及针对 FreeRTOS 的 RTOS 移植包。开发者可以直接将驱动源文件集成进现有工程，无需从零实现底层时序控制，显著缩短产品开发周期。本文详细介绍各驱动模块的组成结构、安装方式、API 接口规范及多任务保护注意事项。
@@ -32,7 +32,7 @@ URM SPI 驱动以两个独立源文件形式提供，安装过程简洁。
 
 将 `urm_spi.c` 和 `urm_spi.h` 复制到项目的驱动目录（例如 `Drivers/URM/`）中。目录结构示例如下：
 
-```
+```text
 your_project/
 ├── Core/
 │   └── Src/

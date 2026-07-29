@@ -1,5 +1,5 @@
 ---
-title: "URM 与 UPC 固件开发代码示例集"
+title: "URM 存储芯片与 UPC MCU 固件开发 C 代码示例集"
 sidebarTitle: "代码示例"
 description: "URM SPI 读写、写保护配置，UPC GPIO/UART/SPI 操作的完整 C 语言代码示例，可直接用于 STM32 HAL 或 UPC MCU 裸机固件开发。"
 ---
@@ -67,7 +67,7 @@ void URM_SingleByteExample(void) {
 ```
 
 **预期输出（串口）：**
-```
+```text
 [INFO]  URM 驱动初始化成功
 [PASS]  地址 0x0010 读写一致：0xA5
 ```
@@ -135,7 +135,7 @@ void URM_BurstRWExample(void) {
 ```
 
 **预期输出：**
-```
+```text
 [PASS]  连续读写 64 字节全部一致
 ```
 
@@ -330,7 +330,7 @@ void UPC_UART_TxExample(void) {
 ```
 
 **预期串口输出（115200 bps）：**
-```
+```text
 === UPC UART 示例程序启动 ===
 [00000] 昕原半导体 UPC 串口测试
 [00001] 昕原半导体 UPC 串口测试
@@ -536,7 +536,7 @@ void URM_Port_DelayUs(uint32_t us) {
 </CodeGroup>
 
 **预期串口输出：**
-```
+```text
 [INFO]  URM 初始化成功
 [INFO]  写入完成
 [INFO]  读写比对结果：

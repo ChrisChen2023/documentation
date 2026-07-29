@@ -1,7 +1,7 @@
 ---
-title: "eReRAM IP 功能仿真环境搭建与使用指南"
+title: "eReRAM IP 功能仿真套件搭建：Verilog 模型、Testbench 与主流仿真器配置指南"
 sidebarTitle: "仿真验证"
-description: "使用昕原提供的 Verilog 功能模型和标准 Testbench，在 VCS、Xcelium 或 ModelSim 中完成 eReRAM IP 的读写功能验证与系统级集成仿真。"
+description: "面向验证工程师的 eReRAM IP 仿真实战指南：介绍 Verilog 功能模型与 SPICE 模型用途、仿真套件目录结构、EREREM_FUNC_SIM 宏配置方法，以及在 VCS、Xcelium、ModelSim 中运行标准 Testbench 和集成 SoC 仿真环境的完整步骤。"
 ---
 
 昕原半导体为每款 eReRAM IP 提供完整的仿真支持套件，涵盖 RTL 功能验证所需的 Verilog 行为模型、用于模拟特性表征的 SPICE 模型，以及可开箱即用的标准 Testbench 工程。工程师可在主流仿真平台上快速搭建仿真环境，验证读写逻辑正确性，并将 IP 无缝集成到 SoC 级验证框架中，显著缩短设计迭代周期。
@@ -275,7 +275,7 @@ module tb_user_soc;
     // ---- 写入 16 个地址 ----
     for (i = 0; i < 16; i = i + 1) begin
       exp_data[i] = $random;          // 生成随机数据
-      task_write(i[ADDR_WIDTH-1:0], exp_data[i]);
+      task_write(i, exp_data[i]);     // task 入口已声明为 [ADDR_WIDTH-1:0]，自动截位
     end
 
     repeat(5) @(posedge clk);
@@ -283,7 +283,7 @@ module tb_user_soc;
 
     // ---- 读出并比对 ----
     for (i = 0; i < 16; i = i + 1) begin
-      task_read(i[ADDR_WIDTH-1:0]);
+      task_read(i);                   // 同上，自动截位至地址位宽
       @(posedge clk); #1;
       if (dout !== exp_data[i]) begin
         $display("[FAIL] 地址 0x%0h: 期望 0x%0h, 实际 0x%0h",

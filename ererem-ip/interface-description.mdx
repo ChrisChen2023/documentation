@@ -1,7 +1,7 @@
 ---
-title: "eReRAM IP AMBA 总线接口信号说明"
+title: "eReRAM IP AMBA APB/AHB 接口信号定义与时序说明"
 sidebarTitle: "接口说明"
-description: "eReRAM IP 支持 AMBA APB 与 AHB 接口，本文详细列出所有接口信号定义、方向、位宽及读写操作时序，供 SoC 集成工程师参考。"
+description: "eReRAM IP 支持 AMBA APB 与 AHB 接口，详细列出全部接口信号定义、方向、位宽及读写操作时序，供 SoC 集成工程师参考。"
 ---
 
 昕原半导体 eReRAM IP 采用业界标准 AMBA（Advanced Microcontroller Bus Architecture）总线接口，默认提供 APB（Advanced Peripheral Bus）版本，可选 AHB（Advanced High-performance Bus）版本。APB 接口适用于低功耗、低频率的外设挂载场景，而 AHB 接口则适合对带宽有更高要求的高速访问应用。两种接口版本共享相同的存储阵列核心，仅总线控制层逻辑有所差异，集成工程师可根据系统总线架构灵活选择。

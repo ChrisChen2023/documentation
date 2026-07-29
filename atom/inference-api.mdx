@@ -1,5 +1,5 @@
 ---
-title: "ATOM 推理运行时 C API 与 Python API 参考"
+title: "ATOM 推理运行时完整 C API 与 Python API 参考文档"
 sidebarTitle: "推理 API"
 description: "atomrt 推理运行时完整 API 文档，涵盖 C API 函数签名、Python API 类方法、错误码说明及多模型并发推理的使用方法。"
 ---
@@ -62,6 +62,16 @@ typedef struct {
 | `ATOM_ERR_MODEL` | `-2` | 模型文件格式错误或版本不兼容 |
 | `ATOM_ERR_SHAPE` | `-3` | 输入张量形状与模型不匹配 |
 | `ATOM_ERR_MEM` | `-4` | 内存或 eReRAM 分配失败 |
+
+### `atom_last_error`
+
+返回当前线程最近一次 ATOM API 调用所产生的错误码，用于在返回 `NULL` 的调用（如 `atom_load_model`）后诊断具体错误原因。
+
+```c
+int atom_last_error(void);
+```
+
+**返回值：** 最近一次错误的错误码（见上方错误码表）；若最近操作成功，则返回 `ATOM_OK (0)`。
 
 ### `atom_create_context`
 
@@ -205,8 +215,7 @@ int main(void)
 ```bash
 gcc -O2 -o infer_demo infer_demo.c \
     -I/usr/include/atom \
-    -latomrt \
-    -o infer_demo
+    -latomrt
 ```
 
 ---

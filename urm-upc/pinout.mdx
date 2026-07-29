@@ -1,7 +1,7 @@
 ---
-title: "URM 存储芯片与 UPC MCU 引脚定义说明"
+title: "昕原半导体 URM1601 SOP-8 与 UPC02 QFN-32 完整引脚定义、功能说明及绝对最大额定值"
 sidebarTitle: "引脚定义"
-description: "URM SOP-8 封装与 UPC QFN-32 封装完整引脚功能说明，包括电源、通信接口、GPIO 及绝对最大额定值，供硬件原理图设计参考。"
+description: "URM1601 SOP-8 封装全部 8 引脚功能及 SPI/I2C 双模式复用对照，UPC02 QFN-32 封装 32 引脚分组定义涵盖 SWD 调试、UART、SPI、I2C、ADC、PWM 及 GPIO，附 URM 和 UPC02 绝对最大额定值与 ESD 防护等级参数。"
 ---
 
 正确理解引脚定义是可靠硬件设计的基础。本页以 URM1601（SOP-8 封装，代表 URM 系列双接口器件）和 UPC02（QFN-32 封装，代表 UPC 系列中端 MCU）为例，详细描述每个引脚的编号、名称、方向类型与功能，并给出绝对最大额定值和 ESD 防护等级，供原理图设计、PCB 布局及硬件可靠性评估参考。
@@ -116,8 +116,8 @@ SWDIO 和 SWDCLK 在不使用调试功能后可通过软件重新配置为普通
 | 28 | **PB2** | 双向 | 通用 GPIO PB2。启动时用于 BOOT 模式选择（高电平进入 ISP Bootloader），量产设计须通过 10 kΩ 电阻下拉至 VSS。 |
 | 29 | **PB3** | 双向 | 通用 GPIO PB3，复用为 SWO（SWD 跟踪输出）或 SPI1_SCK 重映射。 |
 | 30 | **PB4** | 双向 | 通用 GPIO PB4，复用为 SPI1_MISO 重映射或 TIM3_CH1 输入捕获。 |
-| 31 | **PB5** | 双向 | 通用 GPIO PB5，复用为 SPI1_MOSI 重映射或 TIM3_CH2 PWM 输出。 |
-| 32 | **PB10 / PWM_OUT** | 输出 | GPIO PB10，复用为 TIM2_CH3 PWM 输出，支持互补死区控制（配合 PB11）。 |
+| 31 | **PB11 / TIM2_CH4** | 双向 / 输出 | GPIO PB11，复用为 TIM2_CH4 PWM 输出（互补通道）。与引脚 32（PB10/TIM2_CH3）构成互补死区控制对，支持可配置死区时间插入，适用于电机驱动和电源变换应用；不使用互补 PWM 时可作通用 GPIO 输出。 |
+| 32 | **PB10 / TIM2_CH3** | 双向 / 输出 | GPIO PB10，复用为 TIM2_CH3 PWM 输出（正向通道）。与引脚 31（PB11/TIM2_CH4）构成互补 PWM 对；不使用 PWM 时可作通用 GPIO 输出。 |
 
 <Warning>
 QFN-32 封装底部裸焊盘（Exposed Pad，EP）必须焊接至 PCB 地平面，不可悬空。裸焊盘同时承担散热功能，建议在 PCB 底部铺设足够面积的地铜并打过孔阵列，以确保热阻满足 UPC02 最大功耗（典型值 80 mW）的散热要求。

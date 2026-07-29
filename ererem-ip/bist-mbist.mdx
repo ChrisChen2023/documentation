@@ -1,7 +1,7 @@
 ---
-title: "eReRAM IP BIST 与 MBIST 生产测试配置"
+title: "昕原 eReRAM IP BIST 控制器接口与 MBIST 集成：测试算法、运行流程与量产配置指南"
 sidebarTitle: "BIST / MBIST"
-description: "eReRAM IP 内置 BIST 控制器支持 March C- 等多种测试算法，本文介绍 BIST 接口信号、运行流程及与 Tessent/TetraMAX 的 MBIST 集成方法。"
+description: "详解昕原 eReRAM IP 内置 BIST 控制器的接口信号定义、March C-/March X 测试算法选择、BIST_EN 启动与 BIST_DONE 轮询流程，以及与 Siemens Tessent、Synopsys TetraMAX 的 MBIST 集成方法和量产测试温度角落建议。"
 ---
 
 在量产芯片交付前，对嵌入式存储器进行完整的出厂自测是保障良率与可靠性的关键环节。昕原 eReRAM IP 内置专用 BIST（Built-In Self-Test）控制器，支持多种工业标准存储器测试算法，无需借助外部测试设备即可在芯片上完成存储阵列的完整性验证，并可通过标准 MBIST 包装接口与 Tessent、TetraMAX 等第三方 MBIST 工具无缝集成，满足从晶圆测试（WAT）到封装后最终测试（FT）的全流程测试需求。
@@ -76,9 +76,18 @@ BIST 控制器在完成全部测试步骤后，将 `BIST_DONE` 拉高一个时�
 
 ```verilog
 // 轮询等待 BIST 完成
+// 状态编码与寄存器声明
+localparam [1:0] BIST_IDLE    = 2'b00;
+localparam [1:0] BIST_RUNNING = 2'b01;
+localparam [1:0] BIST_CHECK   = 2'b10;
+
+reg [1:0] bist_state;
+reg       bist_en;
+
 always @(posedge bist_clk or negedge bist_rst_n) begin
   if (!bist_rst_n) begin
     bist_state <= BIST_IDLE;
+    bist_en    <= 1'b0;
   end else begin
     case (bist_state)
       BIST_IDLE: begin
@@ -91,6 +100,7 @@ always @(posedge bist_clk or negedge bist_rst_n) begin
         bist_state <= BIST_IDLE;
         bist_en    <= 1'b0;
       end
+      default: bist_state <= BIST_IDLE;
     endcase
   end
 end
